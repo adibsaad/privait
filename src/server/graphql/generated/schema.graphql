@@ -1,0 +1,100 @@
+schema {
+  query: Query
+  mutation: Mutation
+  subscription: Subscription
+}
+
+type AuthSuccessResponse {
+  token: String!
+}
+
+type Conversation {
+  id: ID!
+  messages: [Message!]!
+  title: String!
+}
+
+type ConversationMessageChunk {
+  conversationId: ID!
+  done: Boolean
+  messageChunk: String!
+  messageId: ID!
+  previousMessageId: ID!
+}
+
+type Error {
+  message: String!
+}
+
+type Message {
+  content: String!
+  id: ID!
+  role: MessageRole!
+}
+
+enum MessageRole {
+  ASSISTANT
+  SYSTEM
+  USER
+}
+
+type Mutation {
+  completeMagicLink(token: String!): MutationCompleteMagicLinkResult!
+  deleteConversation(conversationId: Int!): MutationDeleteConversationResult!
+  magicLink(email: String!): MutationMagicLinkResult!
+}
+
+union MutationCompleteMagicLinkResult = Error | MutationCompleteMagicLinkSuccess
+
+type MutationCompleteMagicLinkSuccess {
+  data: AuthSuccessResponse!
+}
+
+union MutationDeleteConversationResult = Error | MutationDeleteConversationSuccess
+
+type MutationDeleteConversationSuccess {
+  data: Boolean!
+}
+
+union MutationMagicLinkResult = Error | MutationMagicLinkSuccess
+
+type MutationMagicLinkSuccess {
+  data: Boolean!
+}
+
+type Query {
+  conversation(conversationId: Int!): Conversation
+  conversations: [Conversation!]
+  currentUser: user
+}
+
+type Subscription {
+  conversation(conversationId: Int, message: String!): SubscriptionConversationResult
+}
+
+union SubscriptionConversationResult = Error | SubscriptionConversationSuccess
+
+type SubscriptionConversationSuccess {
+  data: ConversationMessageChunk!
+}
+
+enum UserRole {
+  ADMIN
+  MEMBER
+  OWNER
+}
+
+type team {
+  id: ID!
+  users: [user!]!
+}
+
+type user {
+  email: String!
+  firstName: String
+  id: ID!
+  lastName: String
+  pictureUrl: String
+  role: UserRole!
+  team: team!
+}

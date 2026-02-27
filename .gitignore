@@ -1,0 +1,17 @@
+node_modules
+# Keep environment variables out of version control
+.env
+.envrc
+
+# Overmind
+.overmind.sock
+Procfile
+
+# IDE - VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+.DS_Store

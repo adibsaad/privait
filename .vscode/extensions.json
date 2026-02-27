@@ -1,0 +1,11 @@
+{
+  "recommendations": [
+    "esbenp.prettier-vscode",
+    "gruntfuggly.todo-tree",
+    "dbaeumer.vscode-eslint",
+    "GraphQL.vscode-graphql-syntax",
+    "tamasfe.even-better-toml",
+    "yoavbls.pretty-ts-errors",
+    "bradlc.vscode-tailwindcss"
+  ]
+}

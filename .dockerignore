@@ -1,0 +1,6 @@
+node_modules
+src/frontend
+src/server/node_modules
+
+.overmind.sock
+.envrc*

@@ -1,0 +1,18 @@
+# Local db credentials
+export DB_HOST=localhost
+export DB_PORT=5432
+export DB_USER=postgres
+export DB_PASSWORD=postgres
+export DB_NAME=privait_dev
+
+# https://github.com/DarthSim/overmind
+# export OVERMIND_DAEMONIZE=1
+# export OVERMIND_AUTO_RESTART=web,worker,ext,frontend
+export OVERMIND_ANY_CAN_DIE=1
+
+# Backend
+export DOMAIN_NAME=mydomain.com
+export JWT_SECRET=secret
+
+# Frontend/Vite
+export VITE_ABC=XYZ
