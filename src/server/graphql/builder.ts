@@ -6,7 +6,6 @@ import { getTableConfig } from 'drizzle-orm/pg-core'
 
 import { db } from '@server/drizzle/db'
 import { relations } from '@server/drizzle/relations'
-import { UserRole } from '@server/drizzle/types'
 import { AuthService } from '@server/services/auth'
 import type { PubSubSchema } from './pubsub'
 
@@ -25,7 +24,6 @@ interface SchemaTypes {
   AuthScopes: {
     public: boolean
     private: boolean
-    role: UserRole[]
   }
   Context: UserContext
   DefaultAuthStrategy: 'all'
@@ -54,10 +52,6 @@ export const builder = new SchemaBuilder<SchemaTypes>({
     authScopes: context => ({
       public: true,
       private: !!context.currentUser,
-
-      // Role-based permissions
-      role: (perm: UserRole[]) =>
-        AuthService.hasAnyRole(context.currentUser!.id, perm),
     }),
   },
   errors: {

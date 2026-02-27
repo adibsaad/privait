@@ -9,9 +9,6 @@ export type CurrentUser = {
   email: string
   pictureUrl?: string | null
   role: UserRole
-  team: {
-    id: string
-  }
 }
 
 export const CurrentUserContext = createContext<{
@@ -34,7 +31,6 @@ gql(/* GraphQL */ `
       id
       email
       pictureUrl
-      role
     }
   }
 `)

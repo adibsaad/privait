@@ -22,7 +22,7 @@ const timeStamps = {
     .notNull(),
 }
 
-export const userRole = pgEnum('UserRole', ['OWNER', 'ADMIN', 'MEMBER'])
+export const messageRoleType = pgEnum('MessageRoleType', ['USER', 'ASSISTANT'])
 
 export const conversation = pgTable(
   'Conversation',
@@ -56,7 +56,6 @@ export const magicLink = pgTable(
     email: text().notNull(),
     expiresAt: timestamp({
       withTimezone: true,
-
       mode: 'date',
     }).notNull(),
     ...timeStamps,
@@ -87,8 +86,6 @@ export const memories = pgTable(
   ],
 )
 
-export const messageRoleType = pgEnum('MessageRoleType', ['USER', 'ASSISTANT'])
-
 export const message = pgTable(
   'Message',
   {
@@ -111,41 +108,6 @@ export const message = pgTable(
       foreignColumns: [conversation.id],
       name: 'Message_conversationId_fkey',
     }).onDelete('cascade'),
-  ],
-)
-
-export const team = pgTable('Team', {
-  id: serial().primaryKey().notNull(),
-  ...timeStamps,
-})
-
-export const userTeamMembership = pgTable(
-  'UserTeamMembership',
-  {
-    userId: integer().primaryKey().notNull(),
-    teamId: integer().notNull(),
-    role: userRole().notNull(),
-  },
-  table => [
-    uniqueIndex('UserTeamMembership_userId_teamId_key').using(
-      'btree',
-      table.userId.asc().nullsLast().op('int4_ops'),
-      table.teamId.asc().nullsLast().op('int4_ops'),
-    ),
-    foreignKey({
-      columns: [table.teamId],
-      foreignColumns: [team.id],
-      name: 'UserTeamMembership_teamId_fkey',
-    })
-      .onUpdate('cascade')
-      .onDelete('restrict'),
-    foreignKey({
-      columns: [table.userId],
-      foreignColumns: [user.id],
-      name: 'UserTeamMembership_userId_fkey',
-    })
-      .onUpdate('cascade')
-      .onDelete('cascade'),
   ],
 )
 

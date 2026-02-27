@@ -3,9 +3,8 @@ import { randomUUID } from 'node:crypto'
 
 import { FRONTEND_URL } from '@server/config/env'
 import { db } from '@server/drizzle/db'
-import { magicLink, userTeamMembership } from '@server/drizzle/schema'
+import { magicLink } from '@server/drizzle/schema'
 import { MagicLinkEmail } from '@server/email/user/magic-link'
-import { UserRole } from '@server/drizzle/types'
 import { GraphqlError } from '@server/graphql/builder'
 
 const EXPIRY = 1000 * 60 * 60 * 24
@@ -43,18 +42,5 @@ export class AuthService {
     await db.delete(magicLink).where(eq(magicLink.token, token))
 
     return magicLinkRecord.email
-  }
-
-  static async hasAnyRole(userId: number, roles: UserRole[]) {
-    const [membership] = await db
-      .select({ role: userTeamMembership.role })
-      .from(userTeamMembership)
-      .where(eq(userTeamMembership.userId, userId))
-
-    if (!membership) {
-      throw new GraphqlError('User not found')
-    }
-
-    return roles.includes(membership.role)
   }
 }

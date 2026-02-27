@@ -78,23 +78,10 @@ type SubscriptionConversationSuccess {
   data: ConversationMessageChunk!
 }
 
-enum UserRole {
-  ADMIN
-  MEMBER
-  OWNER
-}
-
-type team {
-  id: ID!
-  users: [user!]!
-}
-
 type user {
   email: String!
   firstName: String
   id: ID!
   lastName: String
   pictureUrl: String
-  role: UserRole!
-  team: team!
 }

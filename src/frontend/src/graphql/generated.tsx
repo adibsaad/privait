@@ -144,18 +144,6 @@ export type SubscriptionConversationSuccess = {
   data: ConversationMessageChunk
 }
 
-export enum UserRole {
-  Admin = 'ADMIN',
-  Member = 'MEMBER',
-  Owner = 'OWNER',
-}
-
-export type Team = {
-  __typename?: 'team'
-  id: Scalars['ID']['output']
-  users: Array<User>
-}
-
 export type User = {
   __typename?: 'user'
   email: Scalars['String']['output']
@@ -163,8 +151,6 @@ export type User = {
   id: Scalars['ID']['output']
   lastName?: Maybe<Scalars['String']['output']>
   pictureUrl?: Maybe<Scalars['String']['output']>
-  role: UserRole
-  team: Team
 }
 
 export type CurrentUserQueryVariables = Exact<{ [key: string]: never }>
@@ -176,7 +162,6 @@ export type CurrentUserQuery = {
     id: string
     email: string
     pictureUrl?: string | null
-    role: UserRole
   } | null
 }
 
@@ -294,7 +279,6 @@ export const CurrentUserDocument = gql`
       id
       email
       pictureUrl
-      role
     }
   }
 `

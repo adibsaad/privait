@@ -3,12 +3,6 @@ import type { InferSelectModel, InferInsertModel } from 'drizzle-orm'
 import * as schema from './schema'
 
 // Enum types
-export const UserRole = {
-  OWNER: 'OWNER',
-  ADMIN: 'ADMIN',
-  MEMBER: 'MEMBER',
-} as const
-
 export const PlanType = {
   FREE: 'FREE',
   PRO: 'PRO',
@@ -19,22 +13,11 @@ export const MessageRoleType = {
   ASSISTANT: 'ASSISTANT',
 } as const
 
-export type UserRole = (typeof UserRole)[keyof typeof UserRole]
 export type PlanType = (typeof PlanType)[keyof typeof PlanType]
 
 // Table types
 export type User = InferSelectModel<typeof schema.user>
 export type NewUser = InferInsertModel<typeof schema.user>
-
-export type Team = InferSelectModel<typeof schema.team>
-export type NewTeam = InferInsertModel<typeof schema.team>
-
-export type UserTeamMembership = InferSelectModel<
-  typeof schema.userTeamMembership
->
-export type NewUserTeamMembership = InferInsertModel<
-  typeof schema.userTeamMembership
->
 
 export type MagicLink = InferSelectModel<typeof schema.magicLink>
 export type NewMagicLink = InferInsertModel<typeof schema.magicLink>
