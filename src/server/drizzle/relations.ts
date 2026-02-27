@@ -37,7 +37,6 @@ export const relations = defineRelations(schema, r => ({
       from: r.user.id,
       to: r.conversation.userId,
     }),
-    auditLogs: r.many.auditLog(),
   },
   conversation: {
     user: r.one.user({
@@ -53,12 +52,6 @@ export const relations = defineRelations(schema, r => ({
     conversation: r.one.conversation({
       from: r.message.conversationId,
       to: r.conversation.id,
-    }),
-  },
-  auditLog: {
-    user: r.one.user({
-      from: r.auditLog.userId,
-      to: r.user.id,
     }),
   },
 }))

@@ -39,9 +39,6 @@ export type NewUserTeamMembership = InferInsertModel<
 export type MagicLink = InferSelectModel<typeof schema.magicLink>
 export type NewMagicLink = InferInsertModel<typeof schema.magicLink>
 
-export type AuditLog = InferSelectModel<typeof schema.auditLog>
-export type NewAuditLog = InferInsertModel<typeof schema.auditLog>
-
 export type Conversation = InferSelectModel<typeof schema.conversation>
 export type NewConversation = InferInsertModel<typeof schema.conversation>
 

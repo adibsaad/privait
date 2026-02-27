@@ -4,8 +4,6 @@ import { db } from '@server/drizzle/db'
 import { user, team, userTeamMembership } from '@server/drizzle/schema'
 import { UserRole } from '@server/drizzle/types'
 
-import { AuditService } from './audit'
-
 export class UserService {
   static async upsertUserFromEmail({ email }: { email: string }) {
     const [existingUser] = await db
@@ -28,9 +26,6 @@ export class UserService {
         teamId: newTeam.id,
         role: UserRole.OWNER,
       })
-
-      // Log audit event for new user creation
-      await AuditService.logCreateUser(newUser.id, newUser.email, 'magic_link')
 
       return newUser
     }

@@ -24,38 +24,6 @@ const timeStamps = {
 
 export const userRole = pgEnum('UserRole', ['OWNER', 'ADMIN', 'MEMBER'])
 
-export const auditLog = pgTable(
-  'AuditLog',
-  {
-    id: serial().primaryKey().notNull(),
-    event: text().notNull(),
-    data: jsonb().notNull(),
-    userId: integer(),
-    createdAt: timestamp({ withTimezone: true, mode: 'date' })
-      .default(sql`CURRENT_TIMESTAMP`)
-      .notNull(),
-  },
-  table => [
-    index('AuditLog_createdAt_idx').using(
-      'btree',
-      table.createdAt.asc().nullsLast().op('timestamptz_ops'),
-    ),
-    index('AuditLog_event_idx').using(
-      'btree',
-      table.event.asc().nullsLast().op('text_ops'),
-    ),
-    index('AuditLog_userId_idx').using(
-      'btree',
-      table.userId.asc().nullsLast().op('int4_ops'),
-    ),
-    foreignKey({
-      columns: [table.userId],
-      foreignColumns: [user.id],
-      name: 'AuditLog_userId_fkey',
-    }).onDelete('set null'),
-  ],
-)
-
 export const conversation = pgTable(
   'Conversation',
   {
