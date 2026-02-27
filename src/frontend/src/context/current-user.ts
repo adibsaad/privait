@@ -2,13 +2,10 @@ import { createContext } from 'react'
 
 import { gql } from '@apollo/client'
 
-import { UserRole } from '@frontend/graphql/generated'
-
 export type CurrentUser = {
   id: string
   email: string
   pictureUrl?: string | null
-  role: UserRole
 }
 
 export const CurrentUserContext = createContext<{
