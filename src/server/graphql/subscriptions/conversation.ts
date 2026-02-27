@@ -5,6 +5,7 @@ import { llamaPrompt } from '@server/llm/chat'
 import { conversation, message } from '@server/drizzle/schema'
 import { and, asc, eq } from 'drizzle-orm'
 import { ChatHistoryItem } from 'node-llama-cpp'
+import { findRelatedMemoriesForUser } from '@server/llm/query-embedding'
 
 export function conversationSub(builder: Builder) {
   builder.subscriptionField('conversation', t =>
@@ -60,11 +61,15 @@ export function conversationSub(builder: Builder) {
           conversationId = result[0].id
         }
 
-        const existingMsgs = await db
-          .select()
-          .from(message)
-          .where(eq(message.conversationId, conversationId))
-          .orderBy(asc(message.id))
+        const [existingMsgs, relatedMemories] = await Promise.all([
+          db
+            .select()
+            .from(message)
+            .where(eq(message.conversationId, conversationId))
+            .orderBy(asc(message.id)),
+
+          findRelatedMemoriesForUser(currentUser.id, inputMsg),
+        ])
 
         let chatHistory: ChatHistoryItem[] = existingMsgs.map(m =>
           m.role == 'ASSISTANT'
@@ -78,30 +83,40 @@ export function conversationSub(builder: Builder) {
               },
         )
 
-        const userMsgResult = await db
-          .insert(message)
-          .values({
-            content: inputMsg,
-            conversationId,
-            role: 'USER',
+        if (relatedMemories.length > 0) {
+          chatHistory.push({
+            type: 'system',
+            text: `Here are some related memories: ${relatedMemories
+              .map(m => m.name)
+              .join('\n')}`,
           })
-          .returning()
-        const userMessage = userMsgResult[0]
+        }
 
+        const [userMessage, assistantMessage] = await Promise.all([
+          db
+            .insert(message)
+            .values({
+              content: inputMsg,
+              conversationId,
+              role: 'USER',
+            })
+            .returning()
+            .then(r => r[0]),
+          db
+            .insert(message)
+            .values({
+              content: '',
+              conversationId,
+              role: 'ASSISTANT',
+            })
+            .returning()
+            .then(r => r[0]),
+        ])
+
+        const messageId = assistantMessage.id.toString()
         let chunks: string[] = []
         let uuid = crypto.randomUUID()
         let channelId = `conversation:${conversationId}:${uuid}`
-
-        const messageRow = await db
-          .insert(message)
-          .values({
-            content: '',
-            conversationId,
-            role: 'ASSISTANT',
-          })
-          .returning()
-
-        const messageId = messageRow[0].id.toString()
 
         llamaPrompt(
           conversationId,

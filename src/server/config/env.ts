@@ -9,6 +9,7 @@ export const QUEUE_URL =
   process.env.QUEUE_URL ?? 'http://localhost:9324/queues/default'
 export const SMTP_PORT = Number(process.env.SMTP_PORT) || 1025
 export const POSTMARK_API_TOKEN = process.env.POSTMARK_API_TOKEN ?? ''
+export const LLAMA_MODEL_LOCATION = process.env.LLAMA_MODEL_LOCATION
 
 export const API_PREFIX = process.env.API_PREFIX ?? ''
 
@@ -23,6 +24,10 @@ if (!DOMAIN_NAME) {
 
 if (!JWT_SECRET) {
   throw new Error('Missing JWT_SECRET environment variable')
+}
+
+if (!LLAMA_MODEL_LOCATION) {
+  throw new Error('Missing LLAMA_MODEL_LOCATION environment variable')
 }
 
 if (isProd) {

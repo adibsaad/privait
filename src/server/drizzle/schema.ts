@@ -10,6 +10,7 @@ import {
   serial,
   index,
   pgEnum,
+  vector,
 } from 'drizzle-orm/pg-core'
 
 const timeStamps = {
@@ -21,13 +22,63 @@ const timeStamps = {
     .notNull(),
 }
 
-export const planType = pgEnum('PlanType', ['FREE', 'PRO'])
 export const userRole = pgEnum('UserRole', ['OWNER', 'ADMIN', 'MEMBER'])
 
-export const team = pgTable('Team', {
-  id: serial().primaryKey().notNull(),
-  ...timeStamps,
-})
+export const auditLog = pgTable(
+  'AuditLog',
+  {
+    id: serial().primaryKey().notNull(),
+    event: text().notNull(),
+    data: jsonb().notNull(),
+    userId: integer(),
+    createdAt: timestamp({ withTimezone: true, mode: 'date' })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  },
+  table => [
+    index('AuditLog_createdAt_idx').using(
+      'btree',
+      table.createdAt.asc().nullsLast().op('timestamptz_ops'),
+    ),
+    index('AuditLog_event_idx').using(
+      'btree',
+      table.event.asc().nullsLast().op('text_ops'),
+    ),
+    index('AuditLog_userId_idx').using(
+      'btree',
+      table.userId.asc().nullsLast().op('int4_ops'),
+    ),
+    foreignKey({
+      columns: [table.userId],
+      foreignColumns: [user.id],
+      name: 'AuditLog_userId_fkey',
+    }).onDelete('set null'),
+  ],
+)
+
+export const conversation = pgTable(
+  'Conversation',
+  {
+    id: serial().primaryKey().notNull(),
+    userId: integer().notNull(),
+    createdAt: timestamp({ withTimezone: true, mode: 'date' })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+    title: text().notNull(),
+  },
+  table => [
+    index('Conversation_userId_createdAt_idx').using(
+      'btree',
+      table.userId.asc().nullsLast().op('int4_ops'),
+      table.createdAt.asc().nullsLast().op('timestamptz_ops'),
+    ),
+    foreignKey({
+      columns: [table.userId],
+      foreignColumns: [user.id],
+      name: 'Conversation_userId_fkey',
+    }).onDelete('cascade'),
+  ],
+)
 
 export const magicLink = pgTable(
   'MagicLink',
@@ -49,6 +100,56 @@ export const magicLink = pgTable(
     ),
   ],
 )
+
+export const memories = pgTable(
+  'Memories',
+  {
+    id: serial().primaryKey().notNull(),
+    userId: integer().notNull(),
+    content: text().notNull(),
+
+    // Using bge-small-en-v1.5
+    embedding: vector({ dimensions: 384 }).notNull(),
+  },
+  table => [
+    index('embeddingIndex').using(
+      'ivfflat',
+      table.embedding.op('vector_cosine_ops'),
+    ),
+  ],
+)
+
+export const messageRoleType = pgEnum('MessageRoleType', ['USER', 'ASSISTANT'])
+
+export const message = pgTable(
+  'Message',
+  {
+    id: serial().primaryKey().notNull(),
+    conversationId: integer().notNull(),
+    role: messageRoleType().notNull(),
+    content: text().notNull(),
+    createdAt: timestamp({ withTimezone: true, mode: 'date' })
+      .default(sql`CURRENT_TIMESTAMP`)
+      .notNull(),
+  },
+  table => [
+    index('Message_conversationId_createdAt_idx').using(
+      'btree',
+      table.conversationId.asc().nullsLast().op('int4_ops'),
+      table.createdAt.asc().nullsLast().op('timestamptz_ops'),
+    ),
+    foreignKey({
+      columns: [table.conversationId],
+      foreignColumns: [conversation.id],
+      name: 'Message_conversationId_fkey',
+    }).onDelete('cascade'),
+  ],
+)
+
+export const team = pgTable('Team', {
+  id: serial().primaryKey().notNull(),
+  ...timeStamps,
+})
 
 export const userTeamMembership = pgTable(
   'UserTeamMembership',
@@ -109,88 +210,5 @@ export const user = pgTable(
     })
       .onUpdate('cascade')
       .onDelete('set null'),
-  ],
-)
-
-export const auditLog = pgTable(
-  'AuditLog',
-  {
-    id: serial().primaryKey().notNull(),
-    event: text().notNull(),
-    data: jsonb().notNull(),
-    userId: integer(),
-    createdAt: timestamp({ withTimezone: true, mode: 'date' })
-      .default(sql`CURRENT_TIMESTAMP`)
-      .notNull(),
-  },
-  table => [
-    index('AuditLog_createdAt_idx').using(
-      'btree',
-      table.createdAt.asc().nullsLast().op('timestamptz_ops'),
-    ),
-    index('AuditLog_event_idx').using(
-      'btree',
-      table.event.asc().nullsLast().op('text_ops'),
-    ),
-    index('AuditLog_userId_idx').using(
-      'btree',
-      table.userId.asc().nullsLast().op('int4_ops'),
-    ),
-    foreignKey({
-      columns: [table.userId],
-      foreignColumns: [user.id],
-      name: 'AuditLog_userId_fkey',
-    }).onDelete('set null'),
-  ],
-)
-
-export const conversation = pgTable(
-  'Conversation',
-  {
-    id: serial().primaryKey().notNull(),
-    userId: integer().notNull(),
-    createdAt: timestamp({ withTimezone: true, mode: 'date' })
-      .default(sql`CURRENT_TIMESTAMP`)
-      .notNull(),
-    title: text().notNull(),
-  },
-  table => [
-    index('Conversation_userId_createdAt_idx').using(
-      'btree',
-      table.userId.asc().nullsLast().op('int4_ops'),
-      table.createdAt.asc().nullsLast().op('timestamptz_ops'),
-    ),
-    foreignKey({
-      columns: [table.userId],
-      foreignColumns: [user.id],
-      name: 'Conversation_userId_fkey',
-    }).onDelete('cascade'),
-  ],
-)
-
-export const messageRoleType = pgEnum('MessageRoleType', ['USER', 'ASSISTANT'])
-
-export const message = pgTable(
-  'Message',
-  {
-    id: serial().primaryKey().notNull(),
-    conversationId: integer().notNull(),
-    role: messageRoleType().notNull(),
-    content: text().notNull(),
-    createdAt: timestamp({ withTimezone: true, mode: 'date' })
-      .default(sql`CURRENT_TIMESTAMP`)
-      .notNull(),
-  },
-  table => [
-    index('Message_conversationId_createdAt_idx').using(
-      'btree',
-      table.conversationId.asc().nullsLast().op('int4_ops'),
-      table.createdAt.asc().nullsLast().op('timestamptz_ops'),
-    ),
-    foreignKey({
-      columns: [table.conversationId],
-      foreignColumns: [conversation.id],
-      name: 'Message_conversationId_fkey',
-    }).onDelete('cascade'),
   ],
 )

@@ -15,7 +15,7 @@ if (isProd) {
   sslCa = fs.readFileSync(path.join(__dirname, 'global-bundle.pem')).toString()
 }
 
-const pool = new Pool({
+export const pool = new Pool({
   host: process.env.DB_HOST,
   port: Number(process.env.DB_PORT) || 5432,
   user: process.env.DB_USER,

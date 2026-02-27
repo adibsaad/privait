@@ -13,6 +13,7 @@ export OVERMIND_ANY_CAN_DIE=1
 # Backend
 export DOMAIN_NAME=mydomain.com
 export JWT_SECRET=secret
+export LLAMA_MODEL_LOCATION=/home/user/.llama-models
 
 # Frontend/Vite
 export VITE_ABC=XYZ
