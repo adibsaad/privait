@@ -10,6 +10,6 @@ Privait is a self-hosted personal AI system that combines LLMs, vector memory, a
 1. Copy `Procfile.example` to `Procfile`
 1. Copy `.envrc.example` to `.envrc` and modify variables as needed
 1. Run `direnv allow`
-1. Run `./scripts/download-models.sh`
+1. Run `./scripts/init-dev.sh`
 1. Run `pnpm db:create` and `pnpm db:drizzle:push`
 1. Run `pnpm start` to start the servers
