@@ -13,7 +13,9 @@
   },
   "dependencies": {
     "@0no-co/graphqlsp": "^1.15.0",
+    "@aws-sdk/client-s3": "^3.1000.0",
     "@aws-sdk/client-sqs": "^3.883.0",
+    "@aws-sdk/s3-request-presigner": "^3.1000.0",
     "@eslint/js": "^9.35.0",
     "@fastify/cors": "^11.2.0",
     "@graphql-codegen/cli": "^5.0.7",

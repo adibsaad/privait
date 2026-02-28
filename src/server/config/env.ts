@@ -13,6 +13,14 @@ export const LLAMA_MODEL_LOCATION = process.env.LLAMA_MODEL_LOCATION
 
 export const API_PREFIX = process.env.API_PREFIX ?? ''
 
+// RustFS/S3 Configuration
+export const RUSTFS_ENDPOINT =
+  process.env.RUSTFS_ENDPOINT ?? 'http://localhost:9001'
+export const RUSTFS_ACCESS_KEY = process.env.RUSTFS_ACCESS_KEY ?? 'access'
+export const RUSTFS_SECRET_KEY = process.env.RUSTFS_SECRET_KEY ?? 'secret'
+export const RUSTFS_BUCKET = process.env.RUSTFS_BUCKET ?? 'uploads'
+export const RUSTFS_REGION = process.env.RUSTFS_REGION ?? 'us-east-1'
+
 // TODO: Change the default frontend URL
 export const FRONTEND_URL = (
   process.env.FRONTEND_URL ?? 'http://localhost:4000'

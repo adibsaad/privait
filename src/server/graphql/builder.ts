@@ -1,33 +1,41 @@
-import DrizzlePlugin from '@pothos/plugin-drizzle'
 import SchemaBuilder from '@pothos/core'
+import DrizzlePlugin from '@pothos/plugin-drizzle'
 import ErrorsPlugin from '@pothos/plugin-errors'
 import ScopeAuthPlugin from '@pothos/plugin-scope-auth'
 import { getTableConfig } from 'drizzle-orm/pg-core'
 
 import { db } from '@server/drizzle/db'
 import { relations } from '@server/drizzle/relations'
-import { AuthService } from '@server/services/auth'
+
 import type { PubSubSchema } from './pubsub'
 
 type DrizzleRelations = typeof relations
 
+type CurrentUser = {
+  id: number
+  email: string
+}
+
 export interface UserContext {
-  currentUser: {
-    id: number
-    email: string
-  } | null
+  currentUser: CurrentUser | null
   pubSub: PubSubSchema
 }
 
 interface SchemaTypes {
   DrizzleRelations: DrizzleRelations
+  Context: UserContext
   AuthScopes: {
     public: boolean
     private: boolean
   }
-  Context: UserContext
+  AuthContexts: {
+    private: { currentUser: CurrentUser }
+  }
   DefaultAuthStrategy: 'all'
   DefaultFieldNullability: false
+  Scalars: {
+    File: { Input: File; Output: never }
+  }
 }
 
 export class GraphqlError extends Error {
@@ -58,6 +66,12 @@ export const builder = new SchemaBuilder<SchemaTypes>({
     defaultTypes: [GraphqlError],
   },
   defaultFieldNullability: false,
+})
+
+builder.scalarType('File', {
+  serialize: () => {
+    throw new Error('Uploads can only be used as input types')
+  },
 })
 
 export type Builder = typeof builder

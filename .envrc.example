@@ -1,19 +1,22 @@
-# Local db credentials
+# Backend
+export DOMAIN_NAME=mydomain.com
+export JWT_SECRET=secret
+export LLAMA_MODEL_LOCATION=/home/user/.llama-models
 export DB_HOST=localhost
 export DB_PORT=5432
 export DB_USER=postgres
 export DB_PASSWORD=postgres
 export DB_NAME=privait_dev
+export RUSTFS_ENDPOINT=http://localhost:9001
+export RUSTFS_ACCESS_KEY=access
+export RUSTFS_SECRET_KEY=secret
+export RUSTFS_BUCKET=uploads
+export RUSTFS_REGION=us-east-1
+
+# Frontend/Vite
+export VITE_ABC=XYZ
 
 # https://github.com/DarthSim/overmind
 # export OVERMIND_DAEMONIZE=1
 # export OVERMIND_AUTO_RESTART=web,worker,ext,frontend
 export OVERMIND_ANY_CAN_DIE=1
-
-# Backend
-export DOMAIN_NAME=mydomain.com
-export JWT_SECRET=secret
-export LLAMA_MODEL_LOCATION=/home/user/.llama-models
-
-# Frontend/Vite
-export VITE_ABC=XYZ

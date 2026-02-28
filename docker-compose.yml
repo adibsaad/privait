@@ -7,11 +7,11 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: privait_dev
     ports:
-      - "5432:5432"
+      - '5432:5432'
     volumes:
       - postgres:/var/lib/postgresql/18/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -50,9 +50,22 @@ services:
       MP_DATABASE: /data/mailpit.db
       MP_SMTP_AUTH_ACCEPT_ANY: 1
       MP_SMTP_AUTH_ALLOW_INSECURE: 1
+  rustfs:
+    image: rustfs/rustfs:latest
+    ports:
+      - '8080:8080'
+      - '9001:9001'
+    volumes:
+      - rustfs:/data
+    # Using default RUSTFS_ACCESS_KEY or RUSTFS_SECRET_KEY. Override them in production
+    environment:
+      RUSTFS_ACCESS_KEY: access
+      RUSTFS_SECRET_KEY: secret
+      RUSTFS_DATA_DIR: /data
 
 volumes:
   postgres:
   elasticmq:
   mailpit:
   redis:
+  rustfs:

@@ -29,6 +29,7 @@ export type Scalars = {
   Boolean: { input: boolean; output: boolean }
   Int: { input: number; output: number }
   Float: { input: number; output: number }
+  File: { input: any; output: any }
 }
 
 export type AuthSuccessResponse = {
@@ -57,6 +58,32 @@ export type Error = {
   message: Scalars['String']['output']
 }
 
+export enum FileType {
+  Pdf = 'PDF',
+  Text = 'TEXT',
+}
+
+export type FileUpload = {
+  __typename?: 'FileUpload'
+  fileName: Scalars['String']['output']
+  id: Scalars['Int']['output']
+  mimeType: Scalars['String']['output']
+  originalName: Scalars['String']['output']
+  s3Key: Scalars['String']['output']
+  s3Url: Scalars['String']['output']
+  size: Scalars['Int']['output']
+  type: FileType
+}
+
+export type FileUploadInput = {
+  file: Scalars['File']['input']
+}
+
+export type FileUploadPayload = {
+  __typename?: 'FileUploadPayload'
+  fileUpload: FileUpload
+}
+
 export type Message = {
   __typename?: 'Message'
   content: Scalars['String']['output']
@@ -74,7 +101,9 @@ export type Mutation = {
   __typename?: 'Mutation'
   completeMagicLink: MutationCompleteMagicLinkResult
   deleteConversation: MutationDeleteConversationResult
+  deleteFileUpload: FileUpload
   magicLink: MutationMagicLinkResult
+  uploadFile: FileUploadPayload
 }
 
 export type MutationCompleteMagicLinkArgs = {
@@ -85,8 +114,16 @@ export type MutationDeleteConversationArgs = {
   conversationId: Scalars['Int']['input']
 }
 
+export type MutationDeleteFileUploadArgs = {
+  fileId: Scalars['Int']['input']
+}
+
 export type MutationMagicLinkArgs = {
   email: Scalars['String']['input']
+}
+
+export type MutationUploadFileArgs = {
+  input: FileUploadInput
 }
 
 export type MutationCompleteMagicLinkResult =
@@ -119,6 +156,7 @@ export type Query = {
   conversation?: Maybe<Conversation>
   conversations?: Maybe<Array<Conversation>>
   currentUser?: Maybe<User>
+  fileUploads: Array<FileUpload>
 }
 
 export type QueryConversationArgs = {

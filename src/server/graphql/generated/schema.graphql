@@ -26,6 +26,32 @@ type Error {
   message: String!
 }
 
+scalar File
+
+enum FileType {
+  PDF
+  TEXT
+}
+
+type FileUpload {
+  fileName: String!
+  id: Int!
+  mimeType: String!
+  originalName: String!
+  s3Key: String!
+  s3Url: String!
+  size: Int!
+  type: FileType!
+}
+
+input FileUploadInput {
+  file: File!
+}
+
+type FileUploadPayload {
+  fileUpload: FileUpload!
+}
+
 type Message {
   content: String!
   id: ID!
@@ -41,7 +67,9 @@ enum MessageRole {
 type Mutation {
   completeMagicLink(token: String!): MutationCompleteMagicLinkResult!
   deleteConversation(conversationId: Int!): MutationDeleteConversationResult!
+  deleteFileUpload(fileId: Int!): FileUpload!
   magicLink(email: String!): MutationMagicLinkResult!
+  uploadFile(input: FileUploadInput!): FileUploadPayload!
 }
 
 union MutationCompleteMagicLinkResult = Error | MutationCompleteMagicLinkSuccess
@@ -66,6 +94,7 @@ type Query {
   conversation(conversationId: Int!): Conversation
   conversations: [Conversation!]
   currentUser: user
+  fileUploads: [FileUpload!]!
 }
 
 type Subscription {

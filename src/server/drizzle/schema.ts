@@ -24,6 +24,36 @@ const timeStamps = {
 
 export const messageRoleType = pgEnum('MessageRoleType', ['USER', 'ASSISTANT'])
 
+export const fileType = pgEnum('FileType', ['PDF', 'TEXT'])
+
+export const fileUpload = pgTable(
+  'FileUpload',
+  {
+    id: serial().primaryKey().notNull(),
+    userId: integer().notNull(),
+    originalName: text().notNull(),
+    fileName: text().notNull(),
+    mimeType: text().notNull(),
+    size: integer().notNull(),
+    type: fileType().notNull(),
+    s3Key: text().notNull(),
+    s3Url: text().notNull(),
+    ...timeStamps,
+  },
+  table => [
+    index('FileUpload_userId_createdAt_idx').using(
+      'btree',
+      table.userId.asc().nullsLast().op('int4_ops'),
+      table.createdAt.asc().nullsLast().op('timestamptz_ops'),
+    ),
+    foreignKey({
+      columns: [table.userId],
+      foreignColumns: [user.id],
+      name: 'FileUpload_userId_fkey',
+    }).onDelete('cascade'),
+  ],
+)
+
 export const conversation = pgTable(
   'Conversation',
   {
