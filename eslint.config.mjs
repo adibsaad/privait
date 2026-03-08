@@ -1,8 +1,9 @@
-/** @type {import("eslint").Linter.FlatConfig[]} */
 import js from '@eslint/js'
 import importPlugin from 'eslint-plugin-import'
-import prettierPlugin from 'eslint-plugin-prettier'
-import unusedImportsPlugin from 'eslint-plugin-unused-imports'
+import prettier from 'eslint-plugin-prettier'
+import unusedImports from 'eslint-plugin-unused-imports'
+import { defineConfig } from 'eslint/config'
+import globals from 'globals'
 import tseslint from 'typescript-eslint'
 
 const tsAllRulesOff = Object.fromEntries(
@@ -12,12 +13,20 @@ const tsAllRulesOff = Object.fromEntries(
   ]),
 )
 
-export default tseslint.config(
+export default defineConfig(
   ...tseslint.configs.recommended,
   ...tseslint.configs.stylisticTypeChecked,
   js.configs.recommended,
   {
-    files: ['**/*.ts', '**/*.tsx'],
+    files: ['src/server/**/*.[jt]sx?'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
+    },
+  },
+  {
+    files: ['**/*.[jt]sx?'],
     languageOptions: {
       parser: tseslint.parser,
       parserOptions: {
@@ -27,9 +36,9 @@ export default tseslint.config(
       sourceType: 'module',
     },
     plugins: {
-      prettier: prettierPlugin,
+      prettier,
       import: importPlugin,
-      'unused-imports': unusedImportsPlugin,
+      'unused-imports': unusedImports,
     },
     settings: {
       'import/resolver': {
@@ -69,6 +78,7 @@ export default tseslint.config(
       'no-nested-ternary': 'off',
       '@typescript-eslint/no-empty-function': 'off',
       '@typescript-eslint/no-unused-vars': 'off',
+      '@typescript-eslint/no-explicit-any': 'off',
 
       radix: 'off',
       'import/extensions': [
