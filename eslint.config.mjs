@@ -18,7 +18,7 @@ export default defineConfig(
   ...tseslint.configs.stylisticTypeChecked,
   js.configs.recommended,
   {
-    files: ['src/server/**/*.[jt]sx?'],
+    files: ['src/server/**/*.{ts,tsx,js,jsx}'],
     languageOptions: {
       globals: {
         ...globals.node,
@@ -26,7 +26,7 @@ export default defineConfig(
     },
   },
   {
-    files: ['**/*.[jt]sx?'],
+    files: ['**/*.{js,jsx,ts,tsx}'],
     languageOptions: {
       parser: tseslint.parser,
       parserOptions: {
