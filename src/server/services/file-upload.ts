@@ -60,7 +60,7 @@ export class FileUploadService {
     // Validate file
     const validation = this.validateFile(buffer, originalName, mimeType)
     if (!validation.isValid) {
-      throw new GraphqlError(validation.error || 'Invalid file')
+      throw new GraphqlError(validation.error ?? 'Invalid file')
     }
 
     try {
@@ -113,8 +113,8 @@ export class FileUploadService {
       throw new GraphqlError('File not found')
     }
 
-    // TODO: Delete from S3/RustFS
-    // await s3Service.deleteFile(fileRecord[0].s3Key)
+    // Delete from S3/RustFS
+    await s3Service.deleteFile(fileRecord[0].s3Key)
 
     await db.delete(fileUpload).where(eq(fileUpload.id, fileId))
 

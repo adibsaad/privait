@@ -3,6 +3,7 @@ import {
   PutObjectCommand,
   HeadObjectCommand,
   HeadBucketCommand,
+  DeleteObjectCommand,
 } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { createId } from '@paralleldrive/cuid2'
@@ -43,7 +44,7 @@ export class S3Service {
     mimeType: string,
     userId: number,
   ): Promise<FileUploadResult> {
-    const fileExtension = originalName.split('.').pop() || ''
+    const fileExtension = originalName.split('.').pop() ?? ''
     const fileName = `${createId()}.${fileExtension}`
     const s3Key = `uploads/${userId}/${fileName}`
 
@@ -74,10 +75,7 @@ export class S3Service {
     }
   }
 
-  async getPresignedUrl(
-    s3Key: string,
-    expiresIn: number = 3600,
-  ): Promise<string> {
+  async getPresignedUrl(s3Key: string, expiresIn = 3600): Promise<string> {
     const command = new PutObjectCommand({
       Bucket: RUSTFS_BUCKET,
       Key: s3Key,
@@ -100,7 +98,7 @@ export class S3Service {
     try {
       await this.client.send(command)
       return true
-    } catch (error) {
+    } catch {
       return false
     }
   }
@@ -115,15 +113,45 @@ export class S3Service {
       return true // Bucket already exists
     } catch (error: any) {
       if (error.name === 'NotFound') {
-        const command = new PutObjectCommand({
+        const createCommand = new PutObjectCommand({
           Bucket: bucketName,
           Key: '',
         })
-        await this.client.send(command)
+        await this.client.send(createCommand)
         return true // Bucket created
       } else {
         return false // Other error
       }
+    }
+  }
+
+  async deleteFile(s3Key: string) {
+    const command = new DeleteObjectCommand({
+      Bucket: RUSTFS_BUCKET,
+      Key: s3Key,
+    })
+
+    try {
+      await this.client.send(command)
+      return true
+    } catch (error) {
+      console.error('S3 delete error:', error)
+      return false
+    }
+  }
+
+  async getFile(s3Key: string) {
+    const command = new HeadObjectCommand({
+      Bucket: RUSTFS_BUCKET,
+      Key: s3Key,
+    })
+
+    try {
+      const response = await this.client.send(command)
+      return response
+    } catch (error) {
+      console.error('S3 get file error:', error)
+      return null
     }
   }
 }
