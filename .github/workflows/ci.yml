@@ -30,5 +30,18 @@ jobs:
       - name: Run linting
         run: pnpm lint
 
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v3
+
+      - name: Start Docker Compose services
+        run: |
+          docker-compose up -d
+          docker-compose ps
+
+      - name: Setup database
+        run: |
+          pnpm db:create
+          pnpm db:drizzle:push:test
+
       - name: Run tests
         run: pnpm test
