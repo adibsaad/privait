@@ -1,3 +1,4 @@
+import { pushJob } from '@server/jobs/pusher'
 import { fileUploadService } from '@server/services/file-upload'
 
 import { GraphqlError, type Builder } from '../builder'
@@ -69,6 +70,14 @@ export function fileUploadMut(builder: Builder) {
           mimetype || 'application/octet-stream',
           currentUser.id,
         )
+
+        // once it's uploaded, trigger a job to process it
+        void pushJob({
+          type: 'process-file',
+          data: {
+            fileUploadId: fileRecord.id,
+          },
+        })
 
         return {
           fileUpload: fileRecord,

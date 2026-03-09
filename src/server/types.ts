@@ -8,4 +8,11 @@ export interface HelloJob {
   type: 'hello-job'
 }
 
-export type JobType = HelloJob
+export interface ProcessFileJob {
+  type: 'process-file'
+  data: {
+    fileUploadId: number
+  }
+}
+
+export type JobType = HelloJob | ProcessFileJob

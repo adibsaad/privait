@@ -19,7 +19,7 @@
     "install:server": "cd src/server && pnpm install",
     "lint": "npm-run-all lint:server lint:frontend",
     "lint:frontend": "cd src/frontend && pnpm lint",
-    "lint:server": "cd src/server && pnpm lint",
+    "lint:server": "eslint src/server",
     "prepare": "husky",
     "start": "overmind s && sleep 1 && overmind echo",
     "start:frontend": "cd src/frontend && pnpm dev",

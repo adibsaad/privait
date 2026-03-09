@@ -4,7 +4,6 @@ import {
   timestamp,
   text,
   integer,
-  jsonb,
   uniqueIndex,
   foreignKey,
   serial,
@@ -25,6 +24,7 @@ const timeStamps = {
 export const messageRoleType = pgEnum('MessageRoleType', ['USER', 'ASSISTANT'])
 
 export const fileType = pgEnum('FileType', ['PDF', 'TEXT'])
+export const fileStatus = pgEnum('FileStatus', ['UPLOADED', 'PROCESSED'])
 
 export const fileUpload = pgTable(
   'FileUpload',
@@ -38,6 +38,10 @@ export const fileUpload = pgTable(
     type: fileType().notNull(),
     s3Key: text().notNull(),
     s3Url: text().notNull(),
+
+    status: fileStatus().default('UPLOADED').notNull(),
+    processedAt: timestamp({ withTimezone: true, mode: 'date' }),
+
     ...timeStamps,
   },
   table => [
@@ -50,6 +54,29 @@ export const fileUpload = pgTable(
       columns: [table.userId],
       foreignColumns: [user.id],
       name: 'FileUpload_userId_fkey',
+    }).onDelete('cascade'),
+  ],
+)
+
+export const fileUploadChunk = pgTable(
+  'FileUploadChunk',
+  {
+    id: serial().primaryKey().notNull(),
+    fileUploadId: integer().notNull(),
+    content: text().notNull(),
+
+    // Using nomic-embed-text-v1.5 which has 768 dimensions
+    embedding: vector({ dimensions: 768 }).notNull(),
+  },
+  table => [
+    index('FileUploadChunk_fileUploadId_idx').using(
+      'btree',
+      table.fileUploadId.asc().nullsLast().op('int4_ops'),
+    ),
+    foreignKey({
+      columns: [table.fileUploadId],
+      foreignColumns: [fileUpload.id],
+      name: 'FileUploadChunk_fileUploadId_fkey',
     }).onDelete('cascade'),
   ],
 )
@@ -105,8 +132,8 @@ export const memories = pgTable(
     userId: integer().notNull(),
     content: text().notNull(),
 
-    // Using bge-small-en-v1.5
-    embedding: vector({ dimensions: 384 }).notNull(),
+    // Using nomic-embed-text-v1.5 which has 768 dimensions
+    embedding: vector({ dimensions: 768 }).notNull(),
   },
   table => [
     index('embeddingIndex').using(
