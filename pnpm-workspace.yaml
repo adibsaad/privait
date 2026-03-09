@@ -1,4 +1,11 @@
+packages:
+  - src/frontend
+  - src/server
+
 onlyBuiltDependencies:
   - '@parcel/watcher'
   - '@swc/core'
+  - aws-sdk
   - esbuild
+  - node-llama-cpp
+  - unrs-resolver
