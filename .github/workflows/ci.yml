@@ -35,8 +35,16 @@ jobs:
 
       - name: Start Docker Compose services
         run: |
-          docker compose up -d
+          docker compose up -d --quiet-pull
           docker compose ps
+
+      - name: Wait for Postgres to be ready
+        run: |
+          echo "Waiting for Postgres..."
+          until docker exec $(docker ps -q -f name=your_postgres_container_name) pg_isready -U your_db_user; do
+            sleep 2
+          done
+          echo "Postgres is ready!"
 
       - name: Setup database
         run: |
