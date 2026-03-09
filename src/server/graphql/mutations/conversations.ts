@@ -1,8 +1,10 @@
-import { GraphqlError, type Builder } from '../builder'
+import { eq } from 'drizzle-orm'
+
 import { db } from '@server/drizzle/db'
-import { conversation, user } from '@server/drizzle/schema'
+import { conversation } from '@server/drizzle/schema'
 import { clearSession } from '@server/llm/chat'
-import { and, eq } from 'drizzle-orm'
+
+import { GraphqlError, type Builder } from '../builder'
 
 export function conversationsMut(builder: Builder) {
   builder.mutationField('deleteConversation', t =>

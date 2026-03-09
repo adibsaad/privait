@@ -1,6 +1,6 @@
 import type { Builder } from '../builder'
-import { currentUser } from './current-user'
 import { conversationQueries } from './conversation'
+import { currentUser } from './current-user'
 
 export function queries(builder: Builder) {
   builder.queryType({})

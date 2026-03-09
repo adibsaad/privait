@@ -1,4 +1,4 @@
-import { randEmail, randNumber } from '@ngneat/falso'
+import { randEmail } from '@ngneat/falso'
 
 import { db } from '@server/drizzle/db'
 import { team, user, userTeamMembership } from '@server/drizzle/schema'

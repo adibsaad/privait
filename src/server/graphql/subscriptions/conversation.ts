@@ -1,11 +1,13 @@
-import { db } from '@server/drizzle/db'
-import { GraphqlError, type Builder } from '../builder'
-import { ConversationMessageChunkRef } from '../objects/conversations'
-import { llamaPrompt } from '@server/llm/chat'
-import { conversation, message } from '@server/drizzle/schema'
 import { and, asc, eq } from 'drizzle-orm'
 import { ChatHistoryItem } from 'node-llama-cpp'
+
+import { db } from '@server/drizzle/db'
+import { conversation, message } from '@server/drizzle/schema'
+import { llamaPrompt } from '@server/llm/chat'
 import { findRelatedMemoriesForUser } from '@server/llm/query-embedding'
+
+import { GraphqlError, type Builder } from '../builder'
+import { ConversationMessageChunkRef } from '../objects/conversations'
 
 export function conversationSub(builder: Builder) {
   builder.subscriptionField('conversation', t =>
@@ -32,7 +34,7 @@ export function conversationSub(builder: Builder) {
         }
 
         if (conversationId) {
-          let result = await db
+          const result = await db
             .select()
             .from(conversation)
             .where(
@@ -71,7 +73,7 @@ export function conversationSub(builder: Builder) {
           findRelatedMemoriesForUser(currentUser.id, inputMsg),
         ])
 
-        let chatHistory: ChatHistoryItem[] = existingMsgs.map(m =>
+        const chatHistory: ChatHistoryItem[] = existingMsgs.map(m =>
           m.role == 'ASSISTANT'
             ? {
                 type: 'model',
@@ -114,9 +116,9 @@ export function conversationSub(builder: Builder) {
         ])
 
         const messageId = assistantMessage.id.toString()
-        let chunks: string[] = []
-        let uuid = crypto.randomUUID()
-        let channelId = `conversation:${conversationId}:${uuid}`
+        const chunks: string[] = []
+        const uuid = crypto.randomUUID()
+        const channelId = `conversation:${conversationId}:${uuid}`
 
         llamaPrompt(
           conversationId,

@@ -1,6 +1,7 @@
+import inquirer from 'inquirer'
+
 import { pool } from '@server/drizzle/db'
 import { findRelatedMemoriesForUser } from '@server/llm/query-embedding'
-import inquirer from 'inquirer'
 
 inquirer
   .prompt([

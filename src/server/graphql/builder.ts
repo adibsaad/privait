@@ -11,7 +11,7 @@ import type { PubSubSchema } from './pubsub'
 
 type DrizzleRelations = typeof relations
 
-type CurrentUser = {
+interface CurrentUser {
   id: number
   email: string
 }

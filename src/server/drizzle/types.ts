@@ -3,17 +3,10 @@ import type { InferSelectModel, InferInsertModel } from 'drizzle-orm'
 import * as schema from './schema'
 
 // Enum types
-export const PlanType = {
-  FREE: 'FREE',
-  PRO: 'PRO',
-} as const
-
 export const MessageRoleType = {
   USER: 'USER',
   ASSISTANT: 'ASSISTANT',
 } as const
-
-export type PlanType = (typeof PlanType)[keyof typeof PlanType]
 
 // Table types
 export type User = InferSelectModel<typeof schema.user>

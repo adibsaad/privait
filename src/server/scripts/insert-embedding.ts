@@ -1,7 +1,9 @@
+import { LlamaEmbedding } from 'node-llama-cpp'
+
 import { db, pool } from '@server/drizzle/db'
 import { memories } from '@server/drizzle/schema'
 import { generateEmbedding } from '@server/llm/embed'
-import { LlamaEmbedding } from 'node-llama-cpp'
+
 ;(async () => {
   const firstUser = await db.query.user.findFirst()
   if (!firstUser) {
@@ -18,7 +20,7 @@ import { LlamaEmbedding } from 'node-llama-cpp'
     ].map(async s => [s, await generateEmbedding(s)]),
   )
 
-  for (let [content, vector] of embeds) {
+  for (const [content, vector] of embeds) {
     await db.insert(memories).values({
       userId: firstUser.id,
       content,

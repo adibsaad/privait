@@ -1,7 +1,8 @@
-import { generateEmbedding } from '@server/llm/embed'
 import { cosineDistance, desc, gt, eq, and, sql } from 'drizzle-orm'
+
 import { db } from '@server/drizzle/db'
 import { memories } from '@server/drizzle/schema'
+import { generateEmbedding } from '@server/llm/embed'
 
 export const findRelatedMemoriesForUser = async (
   userId: number,

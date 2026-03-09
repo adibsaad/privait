@@ -1,4 +1,4 @@
-import { eq, and, isNull, ne } from 'drizzle-orm'
+import { eq, and, isNull } from 'drizzle-orm'
 
 import { db } from '@server/drizzle/db'
 import { user } from '@server/drizzle/schema'

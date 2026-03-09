@@ -1,17 +1,18 @@
 import { useGraphQLSSE } from '@graphql-yoga/plugin-graphql-sse'
 import { createRedisEventTarget } from '@graphql-yoga/redis-event-target'
+import RelayPlugin from '@pothos/plugin-relay'
 import { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { createYoga, createPubSub, Plugin } from 'graphql-yoga'
 import { Redis } from 'ioredis'
 import jwt from 'jsonwebtoken'
-import RelayPlugin from '@pothos/plugin-relay'
 
 import { JWT_SECRET } from '@server/config/env'
 import { db } from '@server/drizzle/db'
+import { PubSubPublishKeys } from '@server/graphql/pubsub'
+import { schema } from '@server/graphql/schema'
+
 import type { UserContext } from '../graphql/builder'
 import type { JWTPayload } from '../types'
-import { schema } from '@server/graphql/schema'
-import { PubSubPublishKeys } from '@server/graphql/pubsub'
 
 interface Args {
   document: {

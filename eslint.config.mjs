@@ -99,7 +99,10 @@ export default defineConfig(
     rules: tsAllRulesOff,
   },
   {
-    files: ['src/server/**/*.{test.ts,test.tsx,test.js,test.jsx}'],
+    files: [
+      'src/server/**/*.{test.ts,test.tsx,test.js,test.jsx}',
+      'src/server/tests/setupTests.ts',
+    ],
     languageOptions: {
       globals: {
         ...globals.jest,

@@ -1,11 +1,12 @@
 import { exhaust } from '@server/common'
-import { builder, Builder } from '../builder'
 
-export const messageRoleRef = builder.enumType('MessageRole', {
-  values: ['ASSISTANT', 'SYSTEM', 'USER'] as const,
-})
+import { Builder } from '../builder'
 
 export function conversation(builder: Builder) {
+  const messageRoleRef = builder.enumType('MessageRole', {
+    values: ['ASSISTANT', 'SYSTEM', 'USER'] as const,
+  })
+
   builder.drizzleObject('conversation', {
     name: 'Conversation',
     fields: t => ({

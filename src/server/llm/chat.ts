@@ -1,4 +1,3 @@
-import { LLAMA_MODEL_LOCATION } from '@server/config/env'
 import {
   ChatHistoryItem,
   GeneralChatWrapper,
@@ -8,18 +7,18 @@ import {
   resolveChatWrapper,
 } from 'node-llama-cpp'
 
-let convIdToSession: Record<number, LlamaChatSession> = {}
+import { LLAMA_MODEL_LOCATION } from '@server/config/env'
+
+const convIdToSession: Record<number, LlamaChatSession> = {}
 
 const modelPath = `${LLAMA_MODEL_LOCATION}/SmolLM2-360M-Instruct.Q4_K_M.gguf`
 let modelPromise: Promise<LlamaModel> | null = null
 async function loadSmollm() {
-  if (!modelPromise) {
-    modelPromise = getLlama().then(llama =>
-      llama.loadModel({
-        modelPath,
-      }),
-    )
-  }
+  modelPromise ??= getLlama().then(llama =>
+    llama.loadModel({
+      modelPath,
+    }),
+  )
 
   return modelPromise
 }

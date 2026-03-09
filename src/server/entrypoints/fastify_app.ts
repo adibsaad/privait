@@ -2,10 +2,9 @@ import Fastify, { FastifyBaseLogger } from 'fastify'
 import { randomUUID } from 'node:crypto'
 import { Server, IncomingMessage, ServerResponse } from 'node:http'
 
-import { isProd, isTest } from '../common'
-
 import { API_PREFIX } from '@server/config/env'
 
+import { isProd, isTest } from '../common'
 import { initRoutes } from '../routes/all'
 import { initPlugins } from './plugins/all'
 
