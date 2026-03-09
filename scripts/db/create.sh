@@ -11,7 +11,7 @@ BOOTSTRAP_SQL=$(<$DIR/sql/bootstrap.sql)
 runSqlCommand() {
   db=$1
   shift
-  docker-compose exec postgres psql postgresql://postgres:postgres@localhost:5432/$db -c "$*"
+  docker compose exec postgres psql postgresql://postgres:postgres@localhost:5432/$db -c "$*"
 }
 
 runSqlCommand "postgres" $CREATE_DB_SQL

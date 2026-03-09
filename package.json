@@ -68,7 +68,7 @@
       "cd src/frontend && eslint --fix",
       "prettier --write"
     ],
-    "!src/frontend/**/*.{js,jsx,ts,tsx}": [
+    "src/server/**/*.{js,jsx,ts,tsx}": [
       "eslint --fix",
       "prettier --write"
     ]
