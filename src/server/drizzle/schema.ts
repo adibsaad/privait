@@ -4,7 +4,6 @@ import {
   timestamp,
   text,
   integer,
-  jsonb,
   uniqueIndex,
   foreignKey,
   serial,
@@ -25,6 +24,7 @@ const timeStamps = {
 export const messageRoleType = pgEnum('MessageRoleType', ['USER', 'ASSISTANT'])
 
 export const fileType = pgEnum('FileType', ['PDF', 'TEXT'])
+export const fileStatus = pgEnum('FileStatus', ['UPLOADED', 'PROCESSED'])
 
 export const fileUpload = pgTable(
   'FileUpload',
@@ -38,6 +38,10 @@ export const fileUpload = pgTable(
     type: fileType().notNull(),
     s3Key: text().notNull(),
     s3Url: text().notNull(),
+
+    status: fileStatus().default('UPLOADED').notNull(),
+    processedAt: timestamp({ withTimezone: true, mode: 'date' }),
+
     ...timeStamps,
   },
   table => [
