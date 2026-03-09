@@ -22,6 +22,7 @@ export default defineConfig(
     languageOptions: {
       globals: {
         ...globals.node,
+        AsyncGenerator: 'readonly',
       },
     },
   },
@@ -96,5 +97,13 @@ export default defineConfig(
   {
     files: ['**/*.js', '**/*.cjs', '**/*.mjs'],
     rules: tsAllRulesOff,
+  },
+  {
+    files: ['src/server/**/*.{test.ts,test.tsx,test.js,test.jsx}'],
+    languageOptions: {
+      globals: {
+        ...globals.jest,
+      },
+    },
   },
 )

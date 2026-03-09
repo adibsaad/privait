@@ -3,7 +3,9 @@ import { extractText, getDocumentProxy } from 'unpdf'
 
 import { exhaust } from '@server/common'
 import { db } from '@server/drizzle/db'
-import { fileUpload } from '@server/drizzle/schema'
+import { fileUpload, fileUploadChunk } from '@server/drizzle/schema'
+import { streamChunks } from '@server/llm/chunker'
+import { generateEmbedding } from '@server/llm/embed'
 import { s3Service } from '@server/services/s3'
 
 const streamToBuffer = (stream: any): Promise<Buffer> =>
@@ -43,17 +45,27 @@ export async function processUploadedFile(fileUploadId: number) {
   let text = ''
 
   if (file.type === 'PDF') {
-    const { totalPages, text: pdfText } = await getPdfText(fileBuffer)
+    const { text: pdfText } = await getPdfText(fileBuffer)
     text = pdfText
-    console.log({ totalPages, text })
   } else if (file.type === 'TEXT') {
     text = fileBuffer.toString('utf-8')
-    console.log({ text })
   } else {
     exhaust(file.type)
   }
 
-  // todo: chunk, embed, store in vector db
+  let chunkIndex = 0
+  for await (const chunk of streamChunks(text)) {
+    const embedding = await generateEmbedding(chunk.text)
+    await db.insert(fileUploadChunk).values({
+      fileUploadId,
+      content: chunk.text,
+      embedding: embedding.vector as number[],
+    })
+
+    chunkIndex++
+  }
+
+  console.log(`Processed ${chunkIndex} chunks`)
 
   // update the status
   await db
