@@ -31,12 +31,12 @@ jobs:
         run: pnpm lint
 
       - name: Set up Docker
-        uses: docker/setup-compose-action@v2
+        uses: docker/setup-buildx-action@v3
 
       - name: Start Docker Compose services
         run: |
-          docker-compose up -d
-          docker-compose ps
+          docker compose up -d
+          docker compose ps
 
       - name: Setup database
         run: |
