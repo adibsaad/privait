@@ -1,7 +1,11 @@
 import { randEmail } from '@ngneat/falso'
+import { describe, it, expect } from 'vitest'
 
 import { UserService } from '@server/services/user'
-import { executeGraphqlQuery, getFastifyApp } from '@server/tests/setupTests'
+import {
+  executeGraphqlQuery,
+  getFastifyApp,
+} from '@server/tests/graphqlHelpers'
 
 describe('all routes', () => {
   it('responds to root url', async () => {

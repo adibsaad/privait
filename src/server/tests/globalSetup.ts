@@ -1,12 +1,11 @@
-// Can't use path aliases in global setup because ts-jest doesn't apply here ;(
-import { db } from '../drizzle/db'
+import { db } from '@server/drizzle/db'
 
 async function clearDb() {
-  const { rows: tablenames } = await db.execute<{ tablename: string }>(
+  const { rows: tableNames } = await db.execute<{ tablename: string }>(
     `select tablename from pg_tables where schemaname='public'`,
   )
 
-  const tables = tablenames
+  const tables = tableNames
     .map(({ tablename }) => tablename)
     .map(name => `"public"."${name}"`)
     .join(', ')

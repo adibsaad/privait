@@ -1,14 +1,10 @@
 import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { resolve } from 'node:path'
 
 import { BaseEmail } from '../base'
 
-// import templateMjml from '../templates/magic-link.html'
-
-const templateMjml = readFileSync(
-  join(import.meta.dirname!, '../templates/magic-link.html'),
-  'utf-8',
-)
+const templatePath = resolve(process.cwd(), 'email/templates/magic-link.html')
+const templateMjml = readFileSync(templatePath, 'utf-8')
 
 // Use triple curly braces to avoid escaping the URL
 const templateTxt = `

@@ -13,7 +13,19 @@ const tsAllRulesOff = Object.fromEntries(
   ]),
 )
 
+const __dirname = import.meta.dirname
+
 export default defineConfig(
+  {
+    languageOptions: {
+      parser: '@typescript-eslint/parser',
+      parserOptions: {
+        project: './tsconfig.json',
+        tsconfigRootDir: __dirname,
+        extraFileExtensions: ['.ts', '.tsx'],
+      },
+    },
+  },
   ...tseslint.configs.recommended,
   ...tseslint.configs.stylisticTypeChecked,
   js.configs.recommended,
@@ -80,6 +92,7 @@ export default defineConfig(
       '@typescript-eslint/no-empty-function': 'off',
       '@typescript-eslint/no-unused-vars': 'off',
       '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/consistent-type-definitions': 'off',
 
       radix: 'off',
       'import/extensions': [
@@ -105,7 +118,7 @@ export default defineConfig(
     ],
     languageOptions: {
       globals: {
-        ...globals.jest,
+        ...globals.vitest,
       },
     },
   },

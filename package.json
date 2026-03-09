@@ -9,6 +9,7 @@
     "db:recreate": "./scripts/db/recreate.sh",
     "db:drizzle:pull": "cd src/server && pnpm db:drizzle:pull",
     "db:drizzle:push": "cd src/server && pnpm db:drizzle:push",
+    "db:drizzle:push:test": "cd src/server && pnpm db:drizzle:push:test",
     "format": "prettier --write .",
     "format:frontend": "prettier --write src/frontend",
     "format:server": "prettier --write src/server",

@@ -1,12 +1,10 @@
-// Can't use @server in this file because
-// it is imported from globalSetup.js which jest uses,
-// and it doesn't do custom resolvers.
 import { drizzle } from 'drizzle-orm/node-postgres'
 import fs from 'fs'
 import path from 'path'
 import { Pool } from 'pg'
 
-import { isProd } from '../common'
+import { isProd } from '@server/common'
+
 import { relations } from './relations'
 
 let sslCa: string | undefined = undefined

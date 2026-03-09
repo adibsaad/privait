@@ -1,6 +1,6 @@
 import type { PubSub } from 'graphql-yoga'
 
-export interface PubSubPublishKeys {
+export type PubSubPublishKeys = {
   CONVERSATION_MESSAGE: [
     channelId: string,
     payload: {

@@ -1,3 +1,5 @@
+import { describe, test, expect } from 'vitest'
+
 import { streamChunks } from './chunker'
 
 describe('streamChunks', () => {
