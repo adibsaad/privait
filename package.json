@@ -67,7 +67,11 @@
     "@types/node": "^25.3.0"
   },
   "lint-staged": {
-    "*.{js,jsx,ts,tsx}": [
+    "src/frontend/**/*.{js,jsx,ts,tsx}": [
+      "cd src/frontend && eslint --fix",
+      "prettier --write"
+    ],
+    "!src/frontend/**/*.{js,jsx,ts,tsx}": [
       "eslint --fix",
       "prettier --write"
     ]

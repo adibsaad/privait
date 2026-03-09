@@ -8,8 +8,6 @@ import {
   ExternalStoreThreadData,
   ExternalStoreThreadListAdapter,
   AttachmentAdapter,
-  SimpleTextAttachmentAdapter,
-  SimpleImageAttachmentAdapter,
   PendingAttachment,
   CompleteAttachment,
 } from '@assistant-ui/react'
@@ -297,9 +295,14 @@ export function ApolloChatRuntimeProvider({
 
   const attachmentAdapter: AttachmentAdapter = {
     accept: 'application/pdf,.txt,.md',
-    async send(attachment: PendingAttachment): Promise<CompleteAttachment> {
+    async send(_attachment: PendingAttachment): Promise<CompleteAttachment> {
       return {
         id: '',
+        type: 'document',
+        name: '',
+        contentType: '',
+        content: [],
+        status: { type: 'complete' },
       }
     },
 
@@ -334,7 +337,7 @@ export function ApolloChatRuntimeProvider({
       //   url,
       // }
     },
-    async remove(attachment) {
+    async remove(_attachment) {
       // Remove file from server
       // await fetch(`/api/upload/${attachment.id}`, {
       //   method: 'DELETE',

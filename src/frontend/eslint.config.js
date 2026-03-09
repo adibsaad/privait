@@ -5,22 +5,21 @@ import react from 'eslint-plugin-react'
 import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
 import unusedImports from 'eslint-plugin-unused-imports'
+import { defineConfig } from 'eslint/config'
 import globals from 'globals'
 import tseslint from 'typescript-eslint'
 
 import tailwindcss from 'eslint-plugin-tailwindcss'
 
-export default tseslint.config(
+export default defineConfig(
   { ignores: ['dist'] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
-    files: ['**/*.{ts,tsx}'],
+    files: ['./**/*.{ts,tsx}'],
     languageOptions: {
       ecmaVersion: 2020,
       globals: globals.browser,
-      tsconfigRootDir: __dirname,
     },
-    // plugins: ['react-hooks', 'react-refresh', 'unused-imports'],
     plugins: {
       react,
       'react-hooks': reactHooks,
@@ -70,6 +69,13 @@ export default tseslint.config(
       'jsx-a11y/click-events-have-key-events': 'off',
       '@typescript-eslint/no-empty-function': 'off',
       '@typescript-eslint/no-unused-vars': 'off',
+      '@typescript-eslint/no-explicit-any': 'off',
+    },
+  },
+  {
+    files: ['./src/graphql/generated.tsx'],
+    rules: {
+      '@typescript-eslint/ban-ts-comment': 'off',
     },
   },
 )
