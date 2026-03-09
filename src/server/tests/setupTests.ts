@@ -1,4 +1,3 @@
-/* eslint-env jest, node */
 import { FastifyInstance } from 'fastify'
 import * as matchers from 'jest-extended'
 import { enableFetchMocks } from 'jest-fetch-mock'
