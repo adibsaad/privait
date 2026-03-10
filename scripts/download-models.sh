@@ -2,7 +2,10 @@
 
 # Directory to store models
 DIR="$LLAMA_MODEL_LOCATION"
-mkdir -p "$DIR"
+if ! mkdir -p "$DIR"; then
+    echo "🚨 Failed to create directory $DIR" >&2
+    exit 1
+fi
 
 # Number of download retries
 MAX_RETRIES=3

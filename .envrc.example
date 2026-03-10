@@ -1,7 +1,6 @@
 # Backend
 export DOMAIN_NAME=mydomain.com
 export JWT_SECRET=secret
-export LLAMA_MODEL_LOCATION=/home/user/.llama-models
 export DB_HOST=localhost
 export DB_PORT=5432
 export DB_USER=postgres
@@ -12,6 +11,8 @@ export RUSTFS_ACCESS_KEY=access
 export RUSTFS_SECRET_KEY=secret
 export RUSTFS_BUCKET=uploads
 export RUSTFS_REGION=us-east-1
+# Update this to your local path where you want to store the models
+export LLAMA_MODEL_LOCATION=/home/user/.llama-models
 
 # Frontend/Vite
 export VITE_ABC=XYZ
