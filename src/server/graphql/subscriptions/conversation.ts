@@ -4,7 +4,10 @@ import { ChatHistoryItem } from 'node-llama-cpp'
 import { db } from '@server/drizzle/db'
 import { conversation, message } from '@server/drizzle/schema'
 import { llamaPrompt } from '@server/llm/chat'
-import { findRelatedMemoriesForUser } from '@server/llm/query-embedding'
+import {
+  findRelatedFileChunksForUser,
+  findRelatedMemoriesForUser,
+} from '@server/llm/query-embedding'
 
 import { GraphqlError, type Builder } from '../builder'
 import { ConversationMessageChunkRef } from '../objects/conversations'
@@ -63,15 +66,17 @@ export function conversationSub(builder: Builder) {
           conversationId = result[0].id
         }
 
-        const [existingMsgs, relatedMemories] = await Promise.all([
-          db
-            .select()
-            .from(message)
-            .where(eq(message.conversationId, conversationId))
-            .orderBy(asc(message.id)),
+        const [existingMsgs, relatedMemories, relatedFileChunks] =
+          await Promise.all([
+            db
+              .select()
+              .from(message)
+              .where(eq(message.conversationId, conversationId))
+              .orderBy(asc(message.id)),
 
-          findRelatedMemoriesForUser(currentUser.id, inputMsg),
-        ])
+            findRelatedMemoriesForUser(currentUser.id, inputMsg),
+            findRelatedFileChunksForUser(currentUser.id, inputMsg),
+          ])
 
         const chatHistory: ChatHistoryItem[] = existingMsgs.map(m =>
           m.role == 'ASSISTANT'
@@ -90,6 +95,15 @@ export function conversationSub(builder: Builder) {
             type: 'system',
             text: `Here are some related memories: ${relatedMemories
               .map(m => m.name)
+              .join('\n')}`,
+          })
+        }
+
+        if (relatedFileChunks.length > 0) {
+          chatHistory.push({
+            type: 'system',
+            text: `Here are some related file chunks: ${relatedFileChunks
+              .map(c => c.name)
               .join('\n')}`,
           })
         }
