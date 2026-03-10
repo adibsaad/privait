@@ -25,11 +25,6 @@ import {
   SquareIcon,
 } from 'lucide-react'
 
-import {
-  ComposerAddAttachment,
-  ComposerAttachments,
-  UserMessageAttachments,
-} from '@frontend/components/assistant-ui/attachment'
 import { MarkdownText } from '@frontend/components/assistant-ui/markdown-text'
 import { ToolFallback } from '@frontend/components/assistant-ui/tool-fallback'
 import { TooltipIconButton } from '@frontend/components/assistant-ui/tooltip-icon-button'
@@ -138,7 +133,6 @@ const Composer: FC = () => {
   return (
     <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
       <ComposerPrimitive.AttachmentDropzone className="aui-composer-attachment-dropzone flex w-full flex-col rounded-2xl border border-neutral-200 bg-white px-1 pt-2 outline-none transition-shadow has-[textarea:focus-visible]:border-neutral-950 has-[textarea:focus-visible]:ring-2 has-[textarea:focus-visible]:ring-neutral-950/20 data-[dragging=true]:border-dashed data-[dragging=true]:border-neutral-950 data-[dragging=true]:bg-neutral-100/50 dark:border-neutral-800 dark:bg-neutral-950 dark:has-[textarea:focus-visible]:border-neutral-300 dark:has-[textarea:focus-visible]:ring-neutral-300/20 dark:data-[dragging=true]:border-neutral-300 dark:data-[dragging=true]:bg-neutral-800/50">
-        <ComposerAttachments />
         <ComposerPrimitive.Input
           placeholder="Send a message..."
           className="aui-composer-input mb-1 max-h-32 min-h-14 w-full resize-none bg-transparent px-4 pb-3 pt-2 text-sm outline-none placeholder:text-neutral-500 focus-visible:ring-0 dark:placeholder:text-neutral-400"
@@ -154,8 +148,7 @@ const Composer: FC = () => {
 
 const ComposerAction: FC = () => {
   return (
-    <div className="aui-composer-action-wrapper relative mx-2 mb-2 flex items-center justify-between">
-      <ComposerAddAttachment />
+    <div className="aui-composer-action-wrapper relative mx-2 mb-2 flex items-center justify-end">
       <AuiIf condition={s => !s.thread.isRunning}>
         <ComposerPrimitive.Send asChild>
           <TooltipIconButton
@@ -277,8 +270,6 @@ const UserMessage: FC = () => {
       className="aui-user-message-root fade-in slide-in-from-bottom-1 max-w-(--thread-max-width) animate-in mx-auto grid w-full auto-rows-auto grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 py-3 duration-150 [&:where(>*)]:col-start-2"
       data-role="user"
     >
-      <UserMessageAttachments />
-
       <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
         <div className="aui-user-message-content wrap-break-word rounded-2xl bg-neutral-100 px-4 py-2.5 text-neutral-950 dark:bg-neutral-800 dark:text-neutral-50">
           <MessagePrimitive.Parts />

@@ -293,58 +293,6 @@ export function ApolloChatRuntimeProvider({
     }
   }
 
-  const attachmentAdapter: AttachmentAdapter = {
-    accept: 'application/pdf,.txt,.md',
-    async send(_attachment: PendingAttachment): Promise<CompleteAttachment> {
-      return {
-        id: '',
-        type: 'document',
-        name: '',
-        contentType: '',
-        content: [],
-        status: { type: 'complete' },
-      }
-    },
-
-    async add(state) {
-      return {
-        id: state.file.name,
-        type: 'document',
-        name: state.file.name,
-        contentType: state.file.type,
-        file: state.file,
-        status: { type: 'requires-action', reason: 'composer-send' },
-      }
-      // // Upload file to your server
-      // const formData = new FormData()
-      // formData.append('file', file)
-      // const response = await fetch('/api/upload', {
-      //   method: 'POST',
-      //   body: formData,
-      // })
-      // const { id, url } = await response.json()
-      // return {
-      //   id,
-      //   contentType: 'application/pdf',
-      //   status: {
-      //     type: 'running',
-      //     reason: 'uploading',
-      //     progress: 100
-      //   },
-      //   type: 'document',
-      //   name: file.name,
-      //   file,
-      //   url,
-      // }
-    },
-    async remove(_attachment) {
-      // Remove file from server
-      // await fetch(`/api/upload/${attachment.id}`, {
-      //   method: 'DELETE',
-      // })
-    },
-  }
-
   // todo: add kill signal
   const runtime = useExternalStoreRuntime({
     convertMessage: m => m,
@@ -358,7 +306,6 @@ export function ApolloChatRuntimeProvider({
     },
     adapters: {
       threadList: threadListAdapter,
-      attachments: attachmentAdapter,
     },
   })
 
