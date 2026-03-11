@@ -71,5 +71,12 @@
       "eslint --fix",
       "prettier --write"
     ]
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@swc/core",
+      "@tailwindcss/oxide",
+      "esbuild"
+    ]
   }
 }
