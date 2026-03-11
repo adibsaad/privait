@@ -22,11 +22,11 @@ type ConversationMessageChunk {
   previousMessageId: ID!
 }
 
+scalar DateTime
+
 type Error {
   message: String!
 }
-
-scalar File
 
 enum FileType {
   PDF
@@ -34,22 +34,14 @@ enum FileType {
 }
 
 type FileUpload {
-  fileName: String!
-  id: Int!
-  mimeType: String!
+  createdAt: DateTime!
+  id: ID!
   originalName: String!
-  s3Key: String!
-  s3Url: String!
-  size: Int!
   type: FileType!
 }
 
 input FileUploadInput {
-  file: File!
-}
-
-type FileUploadPayload {
-  fileUpload: FileUpload!
+  file: Upload!
 }
 
 type Message {
@@ -67,9 +59,9 @@ enum MessageRole {
 type Mutation {
   completeMagicLink(token: String!): MutationCompleteMagicLinkResult!
   deleteConversation(conversationId: Int!): MutationDeleteConversationResult!
-  deleteFileUpload(fileId: Int!): FileUpload!
+  deleteFileUpload(fileId: Int!): MutationDeleteFileUploadResult!
   magicLink(email: String!): MutationMagicLinkResult!
-  uploadFile(input: FileUploadInput!): FileUploadPayload!
+  uploadFile(input: FileUploadInput!): MutationUploadFileResult!
 }
 
 union MutationCompleteMagicLinkResult = Error | MutationCompleteMagicLinkSuccess
@@ -84,17 +76,29 @@ type MutationDeleteConversationSuccess {
   data: Boolean!
 }
 
+union MutationDeleteFileUploadResult = Error | MutationDeleteFileUploadSuccess
+
+type MutationDeleteFileUploadSuccess {
+  data: Boolean!
+}
+
 union MutationMagicLinkResult = Error | MutationMagicLinkSuccess
 
 type MutationMagicLinkSuccess {
   data: Boolean!
 }
 
+union MutationUploadFileResult = Error | MutationUploadFileSuccess
+
+type MutationUploadFileSuccess {
+  data: FileUpload!
+}
+
 type Query {
   conversation(conversationId: Int!): Conversation
   conversations: [Conversation!]
   currentUser: user
-  fileUploads: [FileUpload!]!
+  files: [FileUpload!]
 }
 
 type Subscription {
@@ -106,6 +110,8 @@ union SubscriptionConversationResult = Error | SubscriptionConversationSuccess
 type SubscriptionConversationSuccess {
   data: ConversationMessageChunk!
 }
+
+scalar Upload
 
 type user {
   email: String!

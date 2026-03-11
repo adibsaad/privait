@@ -2,26 +2,28 @@ import { useRef, useState } from 'react'
 
 import { gql } from '@apollo/client'
 import {
+  useLazyQuery,
+  useMutation,
+  useSubscription,
+} from '@apollo/client/react'
+import {
   ThreadMessageLike,
   AssistantRuntimeProvider,
   useExternalStoreRuntime,
   ExternalStoreThreadData,
   ExternalStoreThreadListAdapter,
-  AttachmentAdapter,
-  PendingAttachment,
-  CompleteAttachment,
 } from '@assistant-ui/react'
 
 import { EMPTY_THREAD_ID } from '@frontend/config/consts'
 import { useThreadContext } from '@frontend/context/thread'
 import {
-  useConversationSubscription,
-  useDeleteConversationMutation,
-  useGetConversationLazyQuery,
-} from '@frontend/graphql/generated'
+  ConversationSubDocument,
+  DeleteConversationDocument,
+  GetConversationDocument,
+} from '@frontend/graphql/output/graphql'
 
 gql(/* GraphQL */ `
-  subscription Conversation($conversationId: Int, $message: String!) {
+  subscription ConversationSub($conversationId: Int, $message: String!) {
     conversation(conversationId: $conversationId, message: $message) {
       __typename
 
@@ -67,8 +69,8 @@ export function ApolloChatRuntimeProvider({
   }>({ msg: '', conversationId: null })
   const [skipSub, skipSubSet] = useState(true)
   const [isRunning, isRunningSet] = useState(false)
-  const [deleteConversationMut] = useDeleteConversationMutation()
-  const [loadConversation] = useGetConversationLazyQuery()
+  const [deleteConversationMut] = useMutation(DeleteConversationDocument)
+  const [loadConversation] = useLazyQuery(GetConversationDocument)
 
   // threads
   const {
@@ -144,7 +146,7 @@ export function ApolloChatRuntimeProvider({
     },
   }
 
-  useConversationSubscription({
+  useSubscription(ConversationSubDocument, {
     variables: {
       conversationId: nextMessage.conversationId,
       message: nextMessage.msg,

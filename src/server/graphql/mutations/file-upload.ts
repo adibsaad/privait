@@ -1,51 +1,23 @@
+import { db } from '@server/drizzle/db'
+import { findFirstOrThrow } from '@server/drizzle/helpers'
 import { pushJob } from '@server/jobs/pusher'
 import { fileUploadService } from '@server/services/file-upload'
 
 import { GraphqlError, type Builder } from '../builder'
-import { FileUpload, FileUploadPayload } from '../objects/file'
 
 export function fileUploadMut(builder: Builder) {
   const FileUploadInput = builder.inputType('FileUploadInput', {
     fields: t => ({
       file: t.field({
-        type: 'File',
+        type: 'Upload',
         required: true,
       }),
     }),
   })
 
-  const FileUploadPayloadType = builder.objectType(FileUploadPayload, {
-    name: 'FileUploadPayload',
-    fields: t => ({
-      fileUpload: t.field({
-        type: FileUploadType,
-        nullable: false,
-        resolve: parent => parent.fileUpload,
-      }),
-    }),
-  })
-
-  const FileUploadType = builder.objectType(FileUpload, {
-    name: 'FileUpload',
-    fields: t => ({
-      id: t.exposeInt('id'),
-      originalName: t.exposeString('originalName'),
-      fileName: t.exposeString('fileName'),
-      mimeType: t.exposeString('mimeType'),
-      size: t.exposeInt('size'),
-      type: t.expose('type', { type: FileType }),
-      s3Key: t.exposeString('s3Key'),
-      s3Url: t.exposeString('s3Url'),
-    }),
-  })
-
-  const FileType = builder.enumType('FileType', {
-    values: ['PDF', 'TEXT'] as const,
-  })
-
   builder.mutationField('uploadFile', t =>
-    t.field({
-      type: FileUploadPayloadType,
+    t.drizzleField({
+      type: 'fileUpload',
       authScopes: {
         private: true,
       },
@@ -55,11 +27,18 @@ export function fileUploadMut(builder: Builder) {
           required: true,
         }),
       },
-      resolve: async (_, { input }, { currentUser }) => {
+      errors: {
+        types: [GraphqlError],
+      },
+      resolve: async (query, _, { input }, { currentUser }) => {
         if (!currentUser) {
           throw new GraphqlError('Authentication required')
         }
         const { file } = input
+        if (!file.bytes) {
+          throw new GraphqlError('File is required')
+        }
+
         const { name, type: mimetype } = file
 
         // Upload the file
@@ -79,32 +58,22 @@ export function fileUploadMut(builder: Builder) {
           },
         })
 
-        return {
-          fileUpload: fileRecord,
-        }
-      },
-    }),
-  )
-
-  builder.queryField('fileUploads', t =>
-    t.field({
-      type: [FileUploadType],
-      authScopes: {
-        private: true,
-      },
-      resolve: async (_, __, { currentUser }) => {
-        if (!currentUser) {
-          throw new GraphqlError('Authentication required')
-        }
-
-        return await fileUploadService.getFileUploads(currentUser.id)
+        return findFirstOrThrow(
+          db.query.fileUpload.findFirst(
+            query({
+              where: {
+                id: fileRecord.id,
+              },
+            }),
+          ),
+        )
       },
     }),
   )
 
   builder.mutationField('deleteFileUpload', t =>
     t.field({
-      type: FileUploadType,
+      type: 'Boolean',
       authScopes: {
         private: true,
       },
@@ -113,12 +82,17 @@ export function fileUploadMut(builder: Builder) {
           required: true,
         }),
       },
+      errors: {
+        types: [GraphqlError],
+      },
       resolve: async (_, { fileId }, { currentUser }) => {
         if (!currentUser) {
           throw new GraphqlError('Authentication required')
         }
 
-        return await fileUploadService.deleteFileUpload(fileId, currentUser.id)
+        await fileUploadService.deleteFileUpload(fileId, currentUser.id)
+
+        return true
       },
     }),
   )

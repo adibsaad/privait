@@ -62,6 +62,10 @@ export function Nav() {
           name: 'Chat',
           href: '/chat',
         },
+        currentUser && {
+          name: 'Files',
+          href: '/files',
+        },
       ].filter(v => !!v),
     [currentUser],
   )

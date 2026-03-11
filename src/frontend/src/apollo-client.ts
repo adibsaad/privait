@@ -13,6 +13,7 @@ import { setContext } from '@apollo/client/link/context'
 import { ErrorLink } from '@apollo/client/link/error'
 import { useApolloClient } from '@apollo/client/react'
 import { getMainDefinition } from '@apollo/client/utilities'
+import UploadHttpLink from 'apollo-upload-client/UploadHttpLink.mjs'
 import { print } from 'graphql'
 import { createClient, ClientOptions, Client } from 'graphql-sse'
 
@@ -106,6 +107,9 @@ export const ClientLinkBuilder = () => {
     client.setLink(
       ApolloLink.from([
         authLink,
+        new UploadHttpLink({
+          uri: `${baseApiUrl}/graphql`,
+        }),
         new ErrorLink(({ operation }) => {
           const context = operation.getContext()
           if (context?.response?.status === 401) {

@@ -6,6 +6,7 @@ import { AuthRoute, UnauthRoute } from './components/auth'
 import { Chat } from './components/chat'
 import { MagicLink } from './pages/auth/magic-link'
 import { ErrorPage } from './pages/error-page'
+import { Files } from './pages/files'
 import { Login } from './pages/log-in'
 import { Root } from './pages/root'
 
@@ -57,6 +58,10 @@ export const router = createBrowserRouter([
           {
             path: 'chat',
             element: <Chat />,
+          },
+          {
+            path: 'files',
+            element: <Files />,
           },
         ],
       },

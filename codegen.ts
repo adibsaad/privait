@@ -8,13 +8,9 @@ const config: CodegenConfig = {
     afterAllFileWrite: ['prettier -w --config .prettierrc'],
   },
   generates: {
-    'src/frontend/src/graphql/generated.tsx': {
+    'src/frontend/src/graphql/output/': {
+      preset: 'client',
       documents: ['src/frontend/src/**/*.{ts,tsx}'],
-      plugins: [
-        'typescript',
-        'typescript-operations',
-        'typescript-react-apollo',
-      ],
     },
     // Used by @0no-co/graphqlsp for vscode intellisense
     './src/server/graphql/generated/schema.graphql': {

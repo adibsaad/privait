@@ -2,6 +2,7 @@ import { useForm } from 'react-hook-form'
 import { Navigate } from 'react-router-dom'
 
 import { gql } from '@apollo/client'
+import { useMutation } from '@apollo/client/react'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { toast } from 'sonner'
 import { z } from 'zod'
@@ -17,7 +18,7 @@ import {
   CardTitle,
 } from '@frontend/components/ui/card'
 import { Form } from '@frontend/components/ui/form'
-import { useMagicLinkMutation } from '@frontend/graphql/generated'
+import { MagicLinkDocument } from '@frontend/graphql/output/graphql'
 import { v } from '@frontend/helpers'
 
 import { useCurrentUser } from '../hooks/current-user'
@@ -45,7 +46,7 @@ const formSchema = z.object({
 type FormValues = z.infer<typeof formSchema>
 export const Login = () => {
   const { currentUser, isLoading } = useCurrentUser()
-  const [magicLinkMut] = useMagicLinkMutation()
+  const [magicLinkMut] = useMutation(MagicLinkDocument)
 
   const magicLinkSubmit = (values: FormValues) => {
     magicLinkMut({

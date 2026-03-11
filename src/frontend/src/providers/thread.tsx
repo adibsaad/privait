@@ -1,15 +1,16 @@
 import { ReactNode, useEffect, useState } from 'react'
 
 import { gql } from '@apollo/client'
+import { useQuery } from '@apollo/client/react'
 import { ThreadMessageLike } from '@assistant-ui/react'
 import { Loader } from 'lucide-react'
 
 import { EMPTY_THREAD_ID } from '@frontend/config/consts'
 import { Thread, ThreadContext } from '@frontend/context/thread'
 import {
+  AllConversationsDocument,
   MessageRole,
-  useAllConversationsQuery,
-} from '@frontend/graphql/generated'
+} from '@frontend/graphql/output/graphql'
 
 gql(/* GraphQL */ `
   query allConversations {
@@ -52,7 +53,7 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
     new Map(),
   )
   const [currentThreadId, setCurrentThreadId] = useState(EMPTY_THREAD_ID)
-  const { data, loading } = useAllConversationsQuery()
+  const { data, loading } = useQuery(AllConversationsDocument)
 
   useEffect(() => {
     if (loading || !data?.conversations?.length) {

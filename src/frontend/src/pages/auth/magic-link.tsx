@@ -2,10 +2,11 @@ import { useEffect, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import { gql } from '@apollo/client'
+import { useMutation } from '@apollo/client/react'
 import { toast } from 'sonner'
 
 import { CenteredSpinner } from '@frontend/components/centered-spinner'
-import { useCompleteMagicLinkMutation } from '@frontend/graphql/generated'
+import { CompleteMagicLinkDocument } from '@frontend/graphql/output/graphql'
 import { useCurrentUser } from '@frontend/hooks/current-user'
 
 gql(/* GraphQL */ `
@@ -27,7 +28,7 @@ gql(/* GraphQL */ `
 `)
 
 export function MagicLink() {
-  const [completeMut] = useCompleteMagicLinkMutation()
+  const [completeMut] = useMutation(CompleteMagicLinkDocument)
   const { setJwt, currentUser, isLoading, refetchCurrentUser } =
     useCurrentUser()
   const [searchParams] = useSearchParams()

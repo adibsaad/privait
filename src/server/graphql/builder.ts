@@ -34,7 +34,8 @@ interface SchemaTypes {
   DefaultAuthStrategy: 'all'
   DefaultFieldNullability: false
   Scalars: {
-    File: { Input: File; Output: never }
+    Upload: { Input: File; Output: never }
+    DateTime: { Input: string; Output: Date }
   }
 }
 
@@ -68,10 +69,14 @@ export const builder = new SchemaBuilder<SchemaTypes>({
   defaultFieldNullability: false,
 })
 
-builder.scalarType('File', {
+builder.scalarType('Upload', {
   serialize: () => {
     throw new Error('Uploads can only be used as input types')
   },
+})
+
+builder.scalarType('DateTime', {
+  serialize: value => value,
 })
 
 export type Builder = typeof builder

@@ -1,4 +1,6 @@
-import { useCurrentUserQuery } from '@frontend/graphql/generated'
+import { useQuery } from '@apollo/client/react'
+
+import { CurrentUserDocument } from '@frontend/graphql/output/graphql'
 
 import { CurrentUserContext } from '../context/current-user'
 import { useSharedJwt } from '../hooks/jwt'
@@ -14,7 +16,7 @@ export const CurrentUserProvider = ({
     data,
     updateQuery,
     refetch,
-  } = useCurrentUserQuery({
+  } = useQuery(CurrentUserDocument, {
     skip: !jwt,
   })
 
