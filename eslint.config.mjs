@@ -16,28 +16,9 @@ const tsAllRulesOff = Object.fromEntries(
 const __dirname = import.meta.dirname
 
 export default defineConfig(
-  {
-    languageOptions: {
-      parser: '@typescript-eslint/parser',
-      parserOptions: {
-        project: './tsconfig.json',
-        tsconfigRootDir: __dirname,
-        extraFileExtensions: ['.ts', '.tsx'],
-      },
-    },
-  },
   ...tseslint.configs.recommended,
   ...tseslint.configs.stylisticTypeChecked,
   js.configs.recommended,
-  {
-    files: ['src/server/**/*.{ts,tsx,js,jsx}'],
-    languageOptions: {
-      globals: {
-        ...globals.node,
-        AsyncGenerator: 'readonly',
-      },
-    },
-  },
   {
     files: ['**/*.{js,jsx,ts,tsx}'],
     languageOptions: {
@@ -112,6 +93,15 @@ export default defineConfig(
     rules: tsAllRulesOff,
   },
   {
+    files: ['src/server/**/*.{ts,tsx,js,jsx}'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+        AsyncGenerator: 'readonly',
+      },
+    },
+  },
+  {
     files: [
       'src/server/**/*.{test.ts,test.tsx,test.js,test.jsx}',
       'src/server/tests/setupTests.ts',
@@ -119,6 +109,23 @@ export default defineConfig(
     languageOptions: {
       globals: {
         ...globals.vitest,
+      },
+    },
+  },
+  {
+    files: ['src/frontend/tailwind.config.js'],
+    languageOptions: {
+      globals: globals.node,
+    },
+  },
+  {
+    files: ['src/frontend/**/*.{ts,tsx,js,jsx}'],
+    languageOptions: {
+      parser: '@typescript-eslint/parser',
+      parserOptions: {
+        project: './tsconfig.json',
+        tsconfigRootDir: __dirname,
+        extraFileExtensions: ['.ts', '.tsx'],
       },
     },
   },
