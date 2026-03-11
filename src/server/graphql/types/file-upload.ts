@@ -4,12 +4,17 @@ const FileType = builder.enumType('FileType', {
   values: ['PDF', 'TEXT'] as const,
 })
 
+const FileStatus = builder.enumType('FileStatus', {
+  values: ['UPLOADED', 'PROCESSED'] as const,
+})
+
 builder.drizzleObject('fileUpload', {
   name: 'FileUpload',
   fields: t => ({
     id: t.exposeID('id'),
     originalName: t.exposeString('originalName'),
     type: t.expose('type', { type: FileType }),
+    status: t.expose('status', { type: FileStatus }),
     createdAt: t.expose('createdAt', { type: 'DateTime' }),
   }),
 })

@@ -38,7 +38,6 @@ gql(`
       ... on MutationUploadFileSuccess {
         data {
           id
-          originalName
         }
       }
     }
@@ -49,11 +48,13 @@ gql(`
       id
       originalName
       createdAt
+      status
     }
   }
 
   mutation DeleteFile($fileId: Int!) {
     deleteFileUpload(fileId: $fileId) {
+      __typename
       ... on Error {
         message
       }
@@ -90,6 +91,7 @@ const FileList = ({
       <TableHeader>
         <TableRow>
           <TableHead>File Name</TableHead>
+          <TableHead className="text-right">Status</TableHead>
           <TableHead className="text-right">Uploaded at</TableHead>
           <TableHead className="text-right">Actions</TableHead>
         </TableRow>
@@ -98,6 +100,7 @@ const FileList = ({
         {files.map(file => (
           <TableRow key={file.id}>
             <TableCell className="font-medium">{file.originalName}</TableCell>
+            <TableCell className="text-right">{file.status}</TableCell>
             <TableCell className="text-right">
               {format(file.createdAt, 'PPP')}
             </TableCell>
@@ -127,24 +130,26 @@ export function Files() {
   const apolloClient = useApolloClient()
   const [uploadFile, { loading: uploadLoading }] =
     useMutation(UploadFileDocument)
-  const { data, loading: loadingFiles, refetch } = useQuery(AllFilesDocument)
+  const {
+    data,
+    loading: loadingFiles,
+    refetch,
+  } = useQuery(AllFilesDocument, {
+    fetchPolicy: 'cache-and-network',
+  })
   const [deleteFile] = useMutation(DeleteFileDocument)
 
   const onDeleteFile = async (fileId: string) => {
-    try {
-      const result = await deleteFile({
-        variables: { fileId: parseInt(fileId) },
-      })
+    const result = await deleteFile({
+      variables: { fileId: parseInt(fileId) },
+    })
 
-      if (result.error) {
-        console.error('Error deleting file:', result.error)
-      }
-
-      console.log('Delete result:', result)
-      refetch()
-    } catch (error) {
-      console.error('Error deleting file:', error)
+    if (result.data?.deleteFileUpload.__typename === 'Error') {
+      toast.error(result.data.deleteFileUpload.message)
+      return
     }
+
+    refetch()
   }
 
   const onUpload = async (file: File) => {

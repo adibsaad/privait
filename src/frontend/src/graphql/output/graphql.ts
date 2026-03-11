@@ -58,6 +58,11 @@ export type Error = {
   message: Scalars['String']['output']
 }
 
+export enum FileStatus {
+  Processed = 'PROCESSED',
+  Uploaded = 'UPLOADED',
+}
+
 export enum FileType {
   Pdf = 'PDF',
   Text = 'TEXT',
@@ -68,6 +73,7 @@ export type FileUpload = {
   createdAt: Scalars['DateTime']['output']
   id: Scalars['ID']['output']
   originalName: Scalars['String']['output']
+  status: FileStatus
   type: FileType
 }
 
@@ -234,7 +240,7 @@ export type UploadFileMutation = {
     | { __typename?: 'Error'; message: string }
     | {
         __typename?: 'MutationUploadFileSuccess'
-        data: { __typename?: 'FileUpload'; id: string; originalName: string }
+        data: { __typename?: 'FileUpload'; id: string }
       }
 }
 
@@ -247,6 +253,7 @@ export type AllFilesQuery = {
     id: string
     originalName: string
     createdAt: any
+    status: FileStatus
   }> | null
 }
 
@@ -257,8 +264,8 @@ export type DeleteFileMutationVariables = Exact<{
 export type DeleteFileMutation = {
   __typename?: 'Mutation'
   deleteFileUpload:
-    | { __typename?: 'Error'; message: string }
-    | { __typename?: 'MutationDeleteFileUploadSuccess'; data: boolean }
+    | { __typename: 'Error'; message: string }
+    | { __typename: 'MutationDeleteFileUploadSuccess'; data: boolean }
 }
 
 export type MagicLinkMutationVariables = Exact<{
@@ -563,10 +570,6 @@ export const UploadFileDocument = {
                               kind: 'Field',
                               name: { kind: 'Name', value: 'id' },
                             },
-                            {
-                              kind: 'Field',
-                              name: { kind: 'Name', value: 'originalName' },
-                            },
                           ],
                         },
                       },
@@ -603,6 +606,7 @@ export const AllFilesDocument = {
                   name: { kind: 'Name', value: 'originalName' },
                 },
                 { kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+                { kind: 'Field', name: { kind: 'Name', value: 'status' } },
               ],
             },
           },
@@ -650,6 +654,7 @@ export const DeleteFileDocument = {
             selectionSet: {
               kind: 'SelectionSet',
               selections: [
+                { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
                 {
                   kind: 'InlineFragment',
                   typeCondition: {
