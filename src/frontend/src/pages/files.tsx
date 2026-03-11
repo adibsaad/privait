@@ -1,5 +1,6 @@
 import { gql } from '@apollo/client/core'
 import { useApolloClient, useMutation, useQuery } from '@apollo/client/react'
+import { format } from 'date-fns'
 import { MoreHorizontalIcon } from 'lucide-react'
 import { toast } from 'sonner'
 
@@ -97,7 +98,9 @@ const FileList = ({
         {files.map(file => (
           <TableRow key={file.id}>
             <TableCell className="font-medium">{file.originalName}</TableCell>
-            <TableCell className="text-right">{file.createdAt}</TableCell>
+            <TableCell className="text-right">
+              {format(file.createdAt, 'PPP')}
+            </TableCell>
             <TableCell className="text-right">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
