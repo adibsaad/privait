@@ -2,7 +2,6 @@ import { eq } from 'drizzle-orm'
 
 import { db } from '@server/drizzle/db'
 import { conversation } from '@server/drizzle/schema'
-import { clearSession } from '@server/llm/chat'
 
 import { GraphqlError, type Builder } from '../builder'
 
@@ -36,7 +35,6 @@ export function conversationsMut(builder: Builder) {
         }
 
         await db.delete(conversation).where(eq(conversation.id, conversationId))
-        clearSession(conversationId)
         return true
       },
     }),

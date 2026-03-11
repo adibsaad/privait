@@ -135,7 +135,6 @@ export function conversationSub(builder: Builder) {
         const channelId = `conversation:${conversationId}:${uuid}`
 
         llamaPrompt(
-          conversationId,
           inputMsg,
           chatHistory,
           (chunk: string) => {

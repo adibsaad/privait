@@ -9,8 +9,6 @@ import {
 
 import { LLAMA_MODEL_LOCATION } from '@server/config/env'
 
-const convIdToSession: Record<number, LlamaChatSession> = {}
-
 const modelPath = `${LLAMA_MODEL_LOCATION}/SmolLM2-360M-Instruct.Q4_K_M.gguf`
 let modelPromise: Promise<LlamaModel> | null = null
 async function loadSmollm() {
@@ -42,23 +40,13 @@ async function genSession() {
   })
 }
 
-// todo: this isn't designed for a multi-server setup.
-// in the future, use pubsub to clear sessions across all instances
-export async function clearSession(convId: number) {
-  delete convIdToSession[convId]
-}
-
 export async function llamaPrompt(
-  conversationId: number,
   msg: string,
   chatHistory: ChatHistoryItem[],
   onTextChunk: (chunk: string) => void,
   onComplete?: () => void,
 ) {
-  let session = convIdToSession[conversationId]
-  if (!session) {
-    session = convIdToSession[conversationId] = await genSession()
-  }
+  const session = await genSession()
 
   session.setChatHistory(chatHistory)
   await session.prompt(msg, {
