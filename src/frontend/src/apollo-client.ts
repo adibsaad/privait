@@ -80,6 +80,10 @@ export const sseLink = new SSELink({
   fetchFn,
 })
 
+const uploadLink = new UploadHttpLink({
+  uri: `${baseApiUrl}/graphql`,
+})
+
 const splitLink = ApolloLink.split(
   ({ query }) => {
     const definition = getMainDefinition(query)
@@ -89,7 +93,13 @@ const splitLink = ApolloLink.split(
     )
   },
   sseLink,
-  httpLink,
+  ApolloLink.split(
+    ({ operationName }) => {
+      return operationName === 'uploadFile'
+    },
+    uploadLink,
+    httpLink,
+  ),
 )
 
 export const ClientLinkBuilder = () => {
@@ -107,9 +117,6 @@ export const ClientLinkBuilder = () => {
     client.setLink(
       ApolloLink.from([
         authLink,
-        new UploadHttpLink({
-          uri: `${baseApiUrl}/graphql`,
-        }),
         new ErrorLink(({ operation }) => {
           const context = operation.getContext()
           if (context?.response?.status === 401) {
