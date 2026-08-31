@@ -12,14 +12,10 @@ export const CurrentUserContext = createContext<{
   currentUser: CurrentUser | null | undefined
   isLoading: boolean
   refetchCurrentUser: () => void
-  logOut: () => void
-  setJwt: (jwt: string) => void
 }>({
   currentUser: null,
   isLoading: true,
   refetchCurrentUser: () => {},
-  logOut: () => {},
-  setJwt: () => {},
 })
 
 gql(/* GraphQL */ `

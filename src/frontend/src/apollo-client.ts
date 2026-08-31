@@ -1,132 +1,78 @@
-import { useEffect, useRef } from 'react'
-
 import {
   ApolloClient,
   ApolloLink,
-  FetchResult,
   HttpLink,
   InMemoryCache,
-  Observable,
-  Operation,
 } from '@apollo/client'
 import { setContext } from '@apollo/client/link/context'
-import { ErrorLink } from '@apollo/client/link/error'
-import { useApolloClient } from '@apollo/client/react'
+import { GraphQLWsLink } from '@apollo/client/link/subscriptions'
 import { getMainDefinition } from '@apollo/client/utilities'
 import UploadHttpLink from 'apollo-upload-client/UploadHttpLink.mjs'
-import { print } from 'graphql'
-import { createClient, ClientOptions, Client } from 'graphql-sse'
+import { createClient } from 'graphql-ws'
 
 import { baseApiUrl } from './config/consts'
-import { useSharedJwt } from './hooks/jwt'
+import { isTauri, serverInfo } from './lib/tauri'
 
-const authLink = setContext((_, { headers }) => {
-  const token = localStorage.getItem('token')
-
-  return {
-    headers: {
-      ...headers,
-      authorization: token ? `Bearer ${token}` : '',
-    },
-  }
-})
-
-const httpLink = new HttpLink({
-  uri: `${baseApiUrl}/graphql`,
-})
-
-export const apolloClient = new ApolloClient({
-  cache: new InMemoryCache(),
-  link: httpLink, // This will get overwritten
-})
-
-class SSELink extends ApolloLink {
-  private client: Client
-
-  constructor(options: ClientOptions) {
-    super()
-    this.client = createClient(options)
-  }
-
-  public request(operation: Operation): Observable<FetchResult> {
-    return new Observable(sink => {
-      return this.client.subscribe<FetchResult, Record<string, unknown>>(
-        { ...operation, query: print(operation.query) },
-        {
-          next: sink.next.bind(sink),
-          complete: sink.complete.bind(sink),
-          error: sink.error.bind(sink),
-        },
-      )
-    })
-  }
+export interface ApolloConfig {
+  baseUrl: string
+  token: string | null
 }
 
-// Override graphql-sse's fetch to include auth header
-const fetchFn: typeof fetch = (input, init) => {
-  const token = localStorage.getItem('token')
-
-  return fetch(input, {
-    ...init,
+const withToken = (config: ApolloConfig) =>
+  setContext((_, { headers }) => ({
     headers: {
-      ...init?.headers,
-      authorization: token ? `Bearer ${token}` : '',
+      ...headers,
+      ...(config.token ? { authorization: `Bearer ${config.token}` } : {}),
     },
+  }))
+
+export function createApolloClient(config: ApolloConfig) {
+  const httpLink = new HttpLink({
+    uri: `${config.baseUrl}/graphql`,
+  })
+
+  // Browser WebSockets can't set Authorization headers, so the upgrade
+  // request itself carries the per-launch token.
+  const wsLink = new GraphQLWsLink(
+    createClient({
+      url: `${config.baseUrl.replace(/^http/, 'ws')}/graphql${
+        config.token ? `?token=${config.token}` : ''
+      }`,
+    }),
+  )
+
+  const uploadLink = new UploadHttpLink({
+    uri: `${config.baseUrl}/graphql`,
+  })
+
+  const splitLink = ApolloLink.split(
+    ({ query }) => {
+      const definition = getMainDefinition(query)
+      return (
+        definition.kind === 'OperationDefinition' &&
+        definition.operation === 'subscription'
+      )
+    },
+    wsLink,
+    ApolloLink.split(
+      ({ operationName }) => operationName === 'uploadFile',
+      uploadLink,
+      httpLink,
+    ),
+  )
+
+  return new ApolloClient({
+    cache: new InMemoryCache(),
+    link: ApolloLink.from([withToken(config), splitLink]),
   })
 }
 
-export const sseLink = new SSELink({
-  url: `${baseApiUrl}/graphql`,
-  fetchFn,
-})
+/** Resolves the API endpoint for the current environment and builds the client. */
+export async function bootstrapApollo(): Promise<ApolloClient<unknown>> {
+  const info = isTauri() ? await serverInfo() : null
 
-const uploadLink = new UploadHttpLink({
-  uri: `${baseApiUrl}/graphql`,
-})
-
-const splitLink = ApolloLink.split(
-  ({ query }) => {
-    const definition = getMainDefinition(query)
-    return (
-      definition.kind === 'OperationDefinition' &&
-      definition.operation === 'subscription'
-    )
-  },
-  sseLink,
-  ApolloLink.split(
-    ({ operationName }) => {
-      return operationName === 'uploadFile'
-    },
-    uploadLink,
-    httpLink,
-  ),
-)
-
-export const ClientLinkBuilder = () => {
-  const { clearJwt } = useSharedJwt()
-  const client = useApolloClient()
-  const hasSetLinkRef = useRef(false)
-
-  useEffect(() => {
-    if (hasSetLinkRef.current) {
-      return
-    }
-
-    hasSetLinkRef.current = true
-
-    client.setLink(
-      ApolloLink.from([
-        authLink,
-        new ErrorLink(({ operation }) => {
-          const context = operation.getContext()
-          if (context?.response?.status === 401) {
-            clearJwt()
-          }
-        }),
-        splitLink,
-      ]),
-    )
-  }, [client, clearJwt])
-
-  return null
+  return createApolloClient({
+    baseUrl: info?.baseUrl ?? baseApiUrl,
+    token: info?.token ?? null,
+  })
 }

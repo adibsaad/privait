@@ -1,0 +1,39 @@
+[package]
+name = "privait"
+version = "0.1.0"
+description = "Privait — private, local-first AI journal"
+license = "AGPL-3.0-only"
+edition = "2021"
+
+[lib]
+name = "privait_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+cc = "1"
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "time"] }
+axum = "0.8"
+async-graphql = "7"
+async-graphql-axum = "7"
+tower-http = { version = "0.6", features = ["cors"] }
+rand = "0.9"
+rusqlite = { version = "=0.32.1", features = ["bundled", "load_extension"] }
+r2d2 = "0.8"
+r2d2_sqlite = "=0.25.0"
+apalis = { version = "=1.0.0-rc.9" }
+apalis-sqlite = { version = "=1.0.0-rc.8" }
+apalis-codec = { version = "=0.1.0-rc.9" }
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
+futures-util = "0.3"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+tempfile = "3"
+tokio-tungstenite = "0.28"
