@@ -1,9 +1,10 @@
 import type { CodegenConfig } from '@graphql-codegen/cli'
 
 const config: CodegenConfig = {
-  // Have to get schema from the server because resolving it
-  // via import will cause resolution errors
-  schema: 'http://localhost:3000/graphql',
+  // The Tauri app's checked-in SDL snapshot (refreshed by the Rust
+  // schema-snapshot test with PRIVAIT_UPDATE_SCHEMA_SNAPSHOT=1). The old
+  // Fastify server that used to serve this over HTTP is frozen.
+  schema: './src-tauri/schema.snapshot.graphql',
   hooks: {
     afterAllFileWrite: ['prettier -w --config .prettierrc'],
   },
@@ -15,7 +16,6 @@ const config: CodegenConfig = {
     // Used by @0no-co/graphqlsp for vscode intellisense
     './src/server/graphql/generated/schema.graphql': {
       plugins: ['schema-ast'],
-      watchPattern: './src/server/graphql/**/*.ts',
       config: {
         includeDirectives: true,
       },

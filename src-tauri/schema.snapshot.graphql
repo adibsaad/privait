@@ -1,3 +1,69 @@
+type Conversation {
+	id: ID!
+	title: String!
+	archived: Boolean!
+	messages: [Message!]!
+}
+
+type ConversationMessageChunk {
+	conversationId: ID!
+	previousMessageId: ID!
+	messageId: ID!
+	messageChunk: String!
+	done: Boolean
+}
+
+"""
+Shared failure type behind the `Error { message }` union arm pattern
+carried over from the existing schema.
+"""
+type Error {
+	message: String!
+}
+
+type Message {
+	id: ID!
+	role: MessageRole!
+	content: String!
+}
+
+enum MessageRole {
+	USER
+	ASSISTANT
+	SYSTEM
+}
+
+type Mutation {
+	deleteConversation(conversationId: Int!): MutationDeleteConversationResult!
+	renameConversation(conversationId: Int!, title: String!): MutationRenameConversationResult!
+	archiveConversation(conversationId: Int!, archived: Boolean!): MutationArchiveConversationResult!
+	saveSettings(input: SettingsInput!): MutationSaveSettingsResult!
+}
+
+union MutationArchiveConversationResult = Error | MutationArchiveConversationSuccess
+
+type MutationArchiveConversationSuccess {
+	data: Boolean!
+}
+
+union MutationDeleteConversationResult = Error | MutationDeleteConversationSuccess
+
+type MutationDeleteConversationSuccess {
+	data: Boolean!
+}
+
+union MutationRenameConversationResult = Error | MutationRenameConversationSuccess
+
+type MutationRenameConversationSuccess {
+	data: Boolean!
+}
+
+union MutationSaveSettingsResult = Error | MutationSaveSettingsSuccess
+
+type MutationSaveSettingsSuccess {
+	data: Settings!
+}
+
 type Query {
 	"""
 	Liveness check for the in-process API server.
@@ -7,13 +73,40 @@ type Query {
 	Resolves locally; kept so the frontend's user context keeps working.
 	"""
 	currentUser: user!
+	conversations: [Conversation!]!
+	conversation(conversationId: Int!): Conversation
+	settings: Settings!
+}
+
+type Settings {
+	baseUrl: String!
+	apiKey: String!
+	model: String!
+}
+
+input SettingsInput {
+	baseUrl: String!
+	apiKey: String!
+	model: String!
 }
 
 type Subscription {
 	"""
-	Trivial streaming subscription used by the M1 WS smoke test.
+	Starts (or continues) a chat turn. `conversationId` omitted creates a
+	conversation; the new user message and an empty assistant message are
+	persisted up front, then provider chunks stream over this subscription.
+	
+	Kill switch: dropping the subscription (stop button / disconnect)
+	drops the receiver below; the pump task notices the failed send,
+	aborts the provider request, and persists the partial reply.
 	"""
-	ping: String!
+	conversation(conversationId: Int, message: String!): SubscriptionConversationResult!
+}
+
+union SubscriptionConversationResult = Error | SubscriptionConversationSuccess
+
+type SubscriptionConversationSuccess {
+	data: ConversationMessageChunk!
 }
 
 """
@@ -37,5 +130,6 @@ Directs the executor to skip this field or fragment when the `if` argument is tr
 directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
 schema {
 	query: Query
+	mutation: Mutation
 	subscription: Subscription
 }

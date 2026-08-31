@@ -39,9 +39,58 @@ Source of truth: `tauri_mvp.md`. This file tracks the current milestone's workin
 - Smoke test passed: app window opened, vite 200, API server 401 without token on free port. Known issue: stale `src/frontend/node_modules/.vite` cache referenced apollo v3 after upgrade — cleared; `rm -rf src/frontend/node_modules/.vite` if deps ever resolve wrong again.
 - Left as-is per user: frontend `pnpm test` run (vitest watch mode; not part of M0 verification).
 
+## M2 — Chat parity (+ Settings UI pulled forward from M4) ✅
+
+User decision: settings storage = the M1 `settings(key, value)` SQLite table (already live in `privait.db`); keychain only before RC.
+
+### Backend (src-tauri) ✅
+
+- [x] `db.rs`: migration v2 — `conversations.archived INTEGER NOT NULL DEFAULT 0`
+- [x] `chunker.rs`: port of `chunker.ts` (sentence regex via fancy-regex, cl100k_base via tiktoken-rs) + all 5 ported tests pass + span/word-fallback/limits tests
+- [x] `provider.rs`: `ChatProvider` trait (async-trait) + `OpenAiCompatProvider` — reqwest, hand-rolled SSE decoder, blank-defaults (`from_settings` returns None until configured)
+- [x] `schema.rs`: Conversation/Message/Settings objects, all four mutations with Error unions, streaming `conversation` subscription (mpsc pump, kill switch, error arms)
+- [x] `schema.snapshot.graphql` refreshed + reviewed (named `Conversation`/`Message` to match old SDL)
+- [x] Tests: 46 total — subscription round-trip vs a mock OpenAI SSE endpoint, missing-conversation/not-configured/provider-error arms, kill-switch persists partial, mutations, settings validation, WS transport round-trip through the real resolver
+
+### Frontend (src/frontend) ✅
+
+- [x] `codegen.ts`: schema → `src-tauri/schema.snapshot.graphql`; codegen green
+- [x] `apollo-chat-runtime.tsx`: `onCancel` stop-generation, `Error` payloads → toast + spinner reset, rename/archive/unarchive/delete persisted, archived threads loaded server-side via ThreadContext
+- [x] Settings UI: `settings-dialog.tsx` (gear in Nav) → GetSettings/SaveSettings; Files page → placeholder until M3 (old page in git history; its generated types no longer exist in the live schema)
+- [x] Verify: vite build green, eslint clean, `vitest run` 5/5, cargo fmt/clippy/test green
+
+### Notes
+
+- Schema additions (settings, rename/archive, `archived`) are intentional deviations from the frozen old schema — M4 parity gate becomes "diff clean minus auth minus these additions".
+- Stop-generation design: frontend unsubscribes → async-graphql drops the stream → mpsc send fails → task persists accumulated chunks and aborts the provider request. No new schema surface needed.
+
+### Live chat verification (user provider: Featherless / GLM-5.3-Flash)
+
+- [x] `cargo run --example chat_smoke` — real app DB: settings → subscription → provider SSE → persisted USER/ASSISTANT rows all green ("pong", 2 chunks, 3.3s). Harness kept at `src-tauri/examples/chat_smoke.rs` for repeatable smoke tests.
+
+### Review (M2)
+
+- **Kill-switch mechanics**: no new schema surface — the stop button unsubscribes (graphql-ws `complete`), async-graphql drops the subscription stream, the pump task sees the failed mpsc send, aborts the provider request, and persists what streamed *before* the drop (accumulate-after-send keeps the aborted chunk out). Same path covers tab/app close.
+- **Streaming uses a dedicated mpsc per subscription**, not a broadcast channel as sketched in the plan — one subscriber per turn, so point-to-point is simpler and drop detection comes free.
+- **Subscription errors ride the union** (`Error` arm as a stream item), matching the old Pothos behavior the frontend checks for; the runtime now toasts them and releases the composer (old code left the spinner stuck).
+- **Check order in the subscription**: conversation existence → provider config → messages; provider-unconfigured errors only surface once the conversation resolves (keeps "Conversation not found" diagnosable).
+- **Schema naming**: Rust-internal `GqlConversation`/`GqlMessage` are SDL-named `Conversation`/`Message`; `#[Object(name = ...)]` renames (not `#[graphql]` on the struct) for `#[Object]`-based types.
+- **Chunker port is byte-faithful**: JS quirks preserved (segments keep leading whitespace; multi-segment chunks are whitespace-normalized joins so span slices only match after normalization; whole-text-smaller-than-overlap re-emits the tail). All 5 JS tests pass with identical expectations.
+- **tiktoken-rs 0.6** has no feature flags (BPEs always bundled) — plain dep, `encode_ordinary` == JS `encode`.
+- **Files page**: replaced with a placeholder — its generated file-upload types don't exist in the live schema until M3, and the M2 backend can't serve uploads anyway. Old page in git history.
+- **SettingsDialog mounts only when opened** (avoids `useQuery` under provider-less test trees; also skips query setup entirely while closed).
+- **Default config is blank** (user decision): chat errors with "not configured — set it up in Settings" until saved; the dialog placeholders hint at ollama.
+
+### UI fixes (user-reported: broken colors + homepage crash)
+
+- [x] Homepage crash: `RenameConversationDocument`/`ArchiveConversationDocument` were used but never imported — vite build doesn't typecheck, so it shipped. Imports added.
+- [x] Colors: index.html body had `bg-white dark:bg-neutral-500` (mid-gray wash); index.css was missing the entire shadcn token palette; tailwind.config.js had no token mappings for the classes assistant-ui uses (`bg-muted`, `text-muted-foreground`, `border-border`, ...). Restored the standard shadcn "neutral" CSS-variable palette + tailwind color map + `body { @apply bg-background text-foreground }`; `root.tsx` invalid `text-dark` class replaced.
+- [x] Fixed pre-existing tsc errors (Apollo v4 generics, vitest 3 `vi.fn` signature, unused import) — `pnpm exec tsc -b` is now green and part of the verification flow.
+- [x] Verified in a browser against vite: dark + light modes render correctly, no crash, chat + settings dialog render.
+
 ## Next
 
-M2 — Chat parity (SQLite + sqlite-vec, apalis `jobs.db`, schema skeleton, Apollo repoint, WS subscription smoke test).
+M3 — Files + RAG parity (restore the real Files page from git history when its schema lands).
 
 ## CI note (M1 wrap-up)
 

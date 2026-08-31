@@ -68,7 +68,7 @@ export function createApolloClient(config: ApolloConfig) {
 }
 
 /** Resolves the API endpoint for the current environment and builds the client. */
-export async function bootstrapApollo(): Promise<ApolloClient<unknown>> {
+export async function bootstrapApollo(): Promise<ApolloClient> {
   const info = isTauri() ? await serverInfo() : null
 
   return createApolloClient({

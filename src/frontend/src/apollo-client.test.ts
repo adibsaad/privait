@@ -4,8 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { bootstrapApollo, createApolloClient } from './apollo-client'
 
 const tauriMocks = vi.hoisted(() => ({
-  isTauri: vi.fn<[], boolean>(() => false),
-  serverInfo: vi.fn<[], Promise<{ baseUrl: string; token: string }>>(
+  isTauri: vi.fn<() => boolean>(() => false),
+  serverInfo: vi.fn<() => Promise<{ baseUrl: string; token: string }>>(
     async () => ({
       baseUrl: 'http://127.0.0.1:54321',
       token: 'launch-token',
@@ -40,7 +40,7 @@ const HEALTH_QUERY = gql`
 `
 
 function stubFetch(response: { body: unknown; status?: number }) {
-  const fetchMock = vi.fn(
+  const fetchMock = vi.fn<typeof fetch>(
     async () =>
       new Response(JSON.stringify(response.body), {
         status: response.status ?? 200,

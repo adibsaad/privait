@@ -1,8 +1,9 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, NavLink } from 'react-router-dom'
 
-import { Moon, Sun, User } from 'lucide-react'
+import { Moon, Settings, Sun, User } from 'lucide-react'
 
+import { SettingsDialog } from '@frontend/components/settings-dialog'
 import { Button } from '@frontend/components/ui/button'
 import {
   DropdownMenu,
@@ -52,6 +53,7 @@ function ModeToggle() {
 
 export function Nav() {
   const { currentUser, isLoading } = useCurrentUser()
+  const [settingsOpen, settingsOpenSet] = useState(false)
 
   const Links = useMemo(
     () =>
@@ -123,6 +125,15 @@ export function Nav() {
       <nav className="ml-auto hidden items-center gap-6 lg:flex">
         <ModeToggle />
 
+        <Button
+          variant="outline"
+          size="icon"
+          onClick={() => settingsOpenSet(true)}
+        >
+          <Settings className="h-[1.2rem] w-[1.2rem]" />
+          <span className="sr-only">Settings</span>
+        </Button>
+
         {isLoading ? (
           <LoadingSpinner />
         ) : (
@@ -134,6 +145,10 @@ export function Nav() {
           </Avatar>
         )}
       </nav>
+
+      {settingsOpen && (
+        <SettingsDialog open={settingsOpen} onOpenChange={settingsOpenSet} />
+      )}
     </header>
   )
 }

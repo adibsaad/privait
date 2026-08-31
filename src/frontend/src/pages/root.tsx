@@ -4,7 +4,7 @@ import { Nav } from '../components/nav'
 
 export function Root() {
   return (
-    <div className="text-dark dark:text-white">
+    <div className="bg-background text-foreground min-h-svh">
       <Nav />
       <section className="p-8">
         <Outlet />

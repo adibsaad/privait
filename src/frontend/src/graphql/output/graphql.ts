@@ -27,17 +27,11 @@ export type Scalars = {
   Boolean: { input: boolean; output: boolean }
   Int: { input: number; output: number }
   Float: { input: number; output: number }
-  DateTime: { input: any; output: any }
-  Upload: { input: any; output: any }
-}
-
-export type AuthSuccessResponse = {
-  __typename?: 'AuthSuccessResponse'
-  token: Scalars['String']['output']
 }
 
 export type Conversation = {
   __typename?: 'Conversation'
+  archived: Scalars['Boolean']['output']
   id: Scalars['ID']['output']
   messages: Array<Message>
   title: Scalars['String']['output']
@@ -52,32 +46,13 @@ export type ConversationMessageChunk = {
   previousMessageId: Scalars['ID']['output']
 }
 
+/**
+ * Shared failure type behind the `Error { message }` union arm pattern
+ * carried over from the existing schema.
+ */
 export type Error = {
   __typename?: 'Error'
   message: Scalars['String']['output']
-}
-
-export enum FileStatus {
-  Processed = 'PROCESSED',
-  Uploaded = 'UPLOADED',
-}
-
-export enum FileType {
-  Pdf = 'PDF',
-  Text = 'TEXT',
-}
-
-export type FileUpload = {
-  __typename?: 'FileUpload'
-  createdAt: Scalars['DateTime']['output']
-  id: Scalars['ID']['output']
-  originalName: Scalars['String']['output']
-  status: FileStatus
-  type: FileType
-}
-
-export type FileUploadInput = {
-  file: Scalars['Upload']['input']
 }
 
 export type Message = {
@@ -95,40 +70,37 @@ export enum MessageRole {
 
 export type Mutation = {
   __typename?: 'Mutation'
-  completeMagicLink: MutationCompleteMagicLinkResult
+  archiveConversation: MutationArchiveConversationResult
   deleteConversation: MutationDeleteConversationResult
-  deleteFileUpload: MutationDeleteFileUploadResult
-  magicLink: MutationMagicLinkResult
-  uploadFile: MutationUploadFileResult
+  renameConversation: MutationRenameConversationResult
+  saveSettings: MutationSaveSettingsResult
 }
 
-export type MutationCompleteMagicLinkArgs = {
-  token: Scalars['String']['input']
+export type MutationArchiveConversationArgs = {
+  archived: Scalars['Boolean']['input']
+  conversationId: Scalars['Int']['input']
 }
 
 export type MutationDeleteConversationArgs = {
   conversationId: Scalars['Int']['input']
 }
 
-export type MutationDeleteFileUploadArgs = {
-  fileId: Scalars['Int']['input']
+export type MutationRenameConversationArgs = {
+  conversationId: Scalars['Int']['input']
+  title: Scalars['String']['input']
 }
 
-export type MutationMagicLinkArgs = {
-  email: Scalars['String']['input']
+export type MutationSaveSettingsArgs = {
+  input: SettingsInput
 }
 
-export type MutationUploadFileArgs = {
-  input: FileUploadInput
-}
-
-export type MutationCompleteMagicLinkResult =
+export type MutationArchiveConversationResult =
   | Error
-  | MutationCompleteMagicLinkSuccess
+  | MutationArchiveConversationSuccess
 
-export type MutationCompleteMagicLinkSuccess = {
-  __typename?: 'MutationCompleteMagicLinkSuccess'
-  data: AuthSuccessResponse
+export type MutationArchiveConversationSuccess = {
+  __typename?: 'MutationArchiveConversationSuccess'
+  data: Scalars['Boolean']['output']
 }
 
 export type MutationDeleteConversationResult =
@@ -140,44 +112,62 @@ export type MutationDeleteConversationSuccess = {
   data: Scalars['Boolean']['output']
 }
 
-export type MutationDeleteFileUploadResult =
+export type MutationRenameConversationResult =
   | Error
-  | MutationDeleteFileUploadSuccess
+  | MutationRenameConversationSuccess
 
-export type MutationDeleteFileUploadSuccess = {
-  __typename?: 'MutationDeleteFileUploadSuccess'
+export type MutationRenameConversationSuccess = {
+  __typename?: 'MutationRenameConversationSuccess'
   data: Scalars['Boolean']['output']
 }
 
-export type MutationMagicLinkResult = Error | MutationMagicLinkSuccess
+export type MutationSaveSettingsResult = Error | MutationSaveSettingsSuccess
 
-export type MutationMagicLinkSuccess = {
-  __typename?: 'MutationMagicLinkSuccess'
-  data: Scalars['Boolean']['output']
-}
-
-export type MutationUploadFileResult = Error | MutationUploadFileSuccess
-
-export type MutationUploadFileSuccess = {
-  __typename?: 'MutationUploadFileSuccess'
-  data: FileUpload
+export type MutationSaveSettingsSuccess = {
+  __typename?: 'MutationSaveSettingsSuccess'
+  data: Settings
 }
 
 export type Query = {
   __typename?: 'Query'
   conversation?: Maybe<Conversation>
-  conversations?: Maybe<Array<Conversation>>
-  currentUser?: Maybe<User>
-  files?: Maybe<Array<FileUpload>>
+  conversations: Array<Conversation>
+  /** Resolves locally; kept so the frontend's user context keeps working. */
+  currentUser: User
+  /** Liveness check for the in-process API server. */
+  health: Scalars['String']['output']
+  settings: Settings
 }
 
 export type QueryConversationArgs = {
   conversationId: Scalars['Int']['input']
 }
 
+export type Settings = {
+  __typename?: 'Settings'
+  apiKey: Scalars['String']['output']
+  baseUrl: Scalars['String']['output']
+  model: Scalars['String']['output']
+}
+
+export type SettingsInput = {
+  apiKey: Scalars['String']['input']
+  baseUrl: Scalars['String']['input']
+  model: Scalars['String']['input']
+}
+
 export type Subscription = {
   __typename?: 'Subscription'
-  conversation?: Maybe<SubscriptionConversationResult>
+  /**
+   * Starts (or continues) a chat turn. `conversationId` omitted creates a
+   * conversation; the new user message and an empty assistant message are
+   * persisted up front, then provider chunks stream over this subscription.
+   *
+   * Kill switch: dropping the subscription (stop button / disconnect)
+   * drops the receiver below; the pump task notices the failed send,
+   * aborts the provider request, and persists the partial reply.
+   */
+  conversation: SubscriptionConversationResult
 }
 
 export type SubscriptionConversationArgs = {
@@ -194,6 +184,7 @@ export type SubscriptionConversationSuccess = {
   data: ConversationMessageChunk
 }
 
+/** The single local user; no auth machinery exists in the desktop app. */
 export type User = {
   __typename?: 'user'
   email: Scalars['String']['output']
@@ -203,79 +194,51 @@ export type User = {
   pictureUrl?: Maybe<Scalars['String']['output']>
 }
 
+export type HealthQueryVariables = Exact<{ [key: string]: never }>
+
+export type HealthQuery = { __typename?: 'Query'; health: string }
+
+export type GetSettingsQueryVariables = Exact<{ [key: string]: never }>
+
+export type GetSettingsQuery = {
+  __typename?: 'Query'
+  settings: {
+    __typename?: 'Settings'
+    baseUrl: string
+    apiKey: string
+    model: string
+  }
+}
+
+export type SaveSettingsMutationVariables = Exact<{
+  input: SettingsInput
+}>
+
+export type SaveSettingsMutation = {
+  __typename?: 'Mutation'
+  saveSettings:
+    | { __typename: 'Error'; message: string }
+    | {
+        __typename: 'MutationSaveSettingsSuccess'
+        data: {
+          __typename?: 'Settings'
+          baseUrl: string
+          apiKey: string
+          model: string
+        }
+      }
+}
+
 export type CurrentUserQueryVariables = Exact<{ [key: string]: never }>
 
 export type CurrentUserQuery = {
   __typename?: 'Query'
-  currentUser?: {
+  currentUser: {
     __typename?: 'user'
     id: string
     email: string
     pictureUrl?: string | null
-  } | null
-}
-
-export type CompleteMagicLinkMutationVariables = Exact<{
-  token: Scalars['String']['input']
-}>
-
-export type CompleteMagicLinkMutation = {
-  __typename?: 'Mutation'
-  completeMagicLink:
-    | { __typename: 'Error'; message: string }
-    | {
-        __typename: 'MutationCompleteMagicLinkSuccess'
-        data: { __typename?: 'AuthSuccessResponse'; token: string }
-      }
-}
-
-export type UploadFileMutationVariables = Exact<{
-  file: Scalars['Upload']['input']
-}>
-
-export type UploadFileMutation = {
-  __typename?: 'Mutation'
-  uploadFile:
-    | { __typename?: 'Error'; message: string }
-    | {
-        __typename?: 'MutationUploadFileSuccess'
-        data: { __typename?: 'FileUpload'; id: string }
-      }
-}
-
-export type AllFilesQueryVariables = Exact<{ [key: string]: never }>
-
-export type AllFilesQuery = {
-  __typename?: 'Query'
-  files?: Array<{
-    __typename?: 'FileUpload'
-    id: string
-    originalName: string
-    createdAt: any
-    status: FileStatus
-  }> | null
-}
-
-export type DeleteFileMutationVariables = Exact<{
-  fileId: Scalars['Int']['input']
-}>
-
-export type DeleteFileMutation = {
-  __typename?: 'Mutation'
-  deleteFileUpload:
-    | { __typename: 'Error'; message: string }
-    | { __typename: 'MutationDeleteFileUploadSuccess'; data: boolean }
-}
-
-export type MagicLinkMutationVariables = Exact<{
-  email: Scalars['String']['input']
-}>
-
-export type MagicLinkMutation = {
-  __typename?: 'Mutation'
-  magicLink:
-    | { __typename: 'Error'; message: string }
-    | { __typename: 'MutationMagicLinkSuccess'; data: boolean }
+  }
 }
 
 export type ConversationSubSubscriptionVariables = Exact<{
@@ -285,7 +248,7 @@ export type ConversationSubSubscriptionVariables = Exact<{
 
 export type ConversationSubSubscription = {
   __typename?: 'Subscription'
-  conversation?:
+  conversation:
     | { __typename: 'Error'; message: string }
     | {
         __typename: 'SubscriptionConversationSuccess'
@@ -298,7 +261,6 @@ export type ConversationSubSubscription = {
           done?: boolean | null
         }
       }
-    | null
 }
 
 export type GetConversationQueryVariables = Exact<{
@@ -321,25 +283,50 @@ export type DeleteConversationMutationVariables = Exact<{
 export type DeleteConversationMutation = {
   __typename?: 'Mutation'
   deleteConversation:
-    | { __typename: 'Error' }
+    | { __typename: 'Error'; message: string }
     | { __typename: 'MutationDeleteConversationSuccess' }
+}
+
+export type RenameConversationMutationVariables = Exact<{
+  conversationId: Scalars['Int']['input']
+  title: Scalars['String']['input']
+}>
+
+export type RenameConversationMutation = {
+  __typename?: 'Mutation'
+  renameConversation:
+    | { __typename: 'Error'; message: string }
+    | { __typename: 'MutationRenameConversationSuccess' }
+}
+
+export type ArchiveConversationMutationVariables = Exact<{
+  conversationId: Scalars['Int']['input']
+  archived: Scalars['Boolean']['input']
+}>
+
+export type ArchiveConversationMutation = {
+  __typename?: 'Mutation'
+  archiveConversation:
+    | { __typename: 'Error'; message: string }
+    | { __typename: 'MutationArchiveConversationSuccess' }
 }
 
 export type AllConversationsQueryVariables = Exact<{ [key: string]: never }>
 
 export type AllConversationsQuery = {
   __typename?: 'Query'
-  conversations?: Array<{
+  conversations: Array<{
     __typename: 'Conversation'
     id: string
     title: string
+    archived: boolean
     messages: Array<{
       __typename: 'Message'
       id: string
       content: string
       role: MessageRole
     }>
-  }> | null
+  }>
 }
 
 export type GetConversationWithMessagesQueryVariables = Exact<{
@@ -361,6 +348,155 @@ export type GetConversationWithMessagesQuery = {
   } | null
 }
 
+export const HealthDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'query',
+      name: { kind: 'Name', value: 'Health' },
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          { kind: 'Field', name: { kind: 'Name', value: 'health' } },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<HealthQuery, HealthQueryVariables>
+export const GetSettingsDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'query',
+      name: { kind: 'Name', value: 'GetSettings' },
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'settings' },
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                { kind: 'Field', name: { kind: 'Name', value: 'baseUrl' } },
+                { kind: 'Field', name: { kind: 'Name', value: 'apiKey' } },
+                { kind: 'Field', name: { kind: 'Name', value: 'model' } },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<GetSettingsQuery, GetSettingsQueryVariables>
+export const SaveSettingsDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'mutation',
+      name: { kind: 'Name', value: 'SaveSettings' },
+      variableDefinitions: [
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'input' },
+          },
+          type: {
+            kind: 'NonNullType',
+            type: {
+              kind: 'NamedType',
+              name: { kind: 'Name', value: 'SettingsInput' },
+            },
+          },
+        },
+      ],
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'saveSettings' },
+            arguments: [
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'input' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'input' },
+                },
+              },
+            ],
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: {
+                      kind: 'Name',
+                      value: 'MutationSaveSettingsSuccess',
+                    },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'data' },
+                        selectionSet: {
+                          kind: 'SelectionSet',
+                          selections: [
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'baseUrl' },
+                            },
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'apiKey' },
+                            },
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'model' },
+                            },
+                          ],
+                        },
+                      },
+                    ],
+                  },
+                },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: { kind: 'Name', value: 'Error' },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'message' },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<
+  SaveSettingsMutation,
+  SaveSettingsMutationVariables
+>
 export const CurrentUserDocument = {
   kind: 'Document',
   definitions: [
@@ -388,392 +524,6 @@ export const CurrentUserDocument = {
     },
   ],
 } as unknown as DocumentNode<CurrentUserQuery, CurrentUserQueryVariables>
-export const CompleteMagicLinkDocument = {
-  kind: 'Document',
-  definitions: [
-    {
-      kind: 'OperationDefinition',
-      operation: 'mutation',
-      name: { kind: 'Name', value: 'CompleteMagicLink' },
-      variableDefinitions: [
-        {
-          kind: 'VariableDefinition',
-          variable: {
-            kind: 'Variable',
-            name: { kind: 'Name', value: 'token' },
-          },
-          type: {
-            kind: 'NonNullType',
-            type: {
-              kind: 'NamedType',
-              name: { kind: 'Name', value: 'String' },
-            },
-          },
-        },
-      ],
-      selectionSet: {
-        kind: 'SelectionSet',
-        selections: [
-          {
-            kind: 'Field',
-            name: { kind: 'Name', value: 'completeMagicLink' },
-            arguments: [
-              {
-                kind: 'Argument',
-                name: { kind: 'Name', value: 'token' },
-                value: {
-                  kind: 'Variable',
-                  name: { kind: 'Name', value: 'token' },
-                },
-              },
-            ],
-            selectionSet: {
-              kind: 'SelectionSet',
-              selections: [
-                { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
-                {
-                  kind: 'InlineFragment',
-                  typeCondition: {
-                    kind: 'NamedType',
-                    name: { kind: 'Name', value: 'Error' },
-                  },
-                  selectionSet: {
-                    kind: 'SelectionSet',
-                    selections: [
-                      {
-                        kind: 'Field',
-                        name: { kind: 'Name', value: 'message' },
-                      },
-                    ],
-                  },
-                },
-                {
-                  kind: 'InlineFragment',
-                  typeCondition: {
-                    kind: 'NamedType',
-                    name: {
-                      kind: 'Name',
-                      value: 'MutationCompleteMagicLinkSuccess',
-                    },
-                  },
-                  selectionSet: {
-                    kind: 'SelectionSet',
-                    selections: [
-                      {
-                        kind: 'Field',
-                        name: { kind: 'Name', value: 'data' },
-                        selectionSet: {
-                          kind: 'SelectionSet',
-                          selections: [
-                            {
-                              kind: 'Field',
-                              name: { kind: 'Name', value: 'token' },
-                            },
-                          ],
-                        },
-                      },
-                    ],
-                  },
-                },
-              ],
-            },
-          },
-        ],
-      },
-    },
-  ],
-} as unknown as DocumentNode<
-  CompleteMagicLinkMutation,
-  CompleteMagicLinkMutationVariables
->
-export const UploadFileDocument = {
-  kind: 'Document',
-  definitions: [
-    {
-      kind: 'OperationDefinition',
-      operation: 'mutation',
-      name: { kind: 'Name', value: 'uploadFile' },
-      variableDefinitions: [
-        {
-          kind: 'VariableDefinition',
-          variable: { kind: 'Variable', name: { kind: 'Name', value: 'file' } },
-          type: {
-            kind: 'NonNullType',
-            type: {
-              kind: 'NamedType',
-              name: { kind: 'Name', value: 'Upload' },
-            },
-          },
-        },
-      ],
-      selectionSet: {
-        kind: 'SelectionSet',
-        selections: [
-          {
-            kind: 'Field',
-            name: { kind: 'Name', value: 'uploadFile' },
-            arguments: [
-              {
-                kind: 'Argument',
-                name: { kind: 'Name', value: 'input' },
-                value: {
-                  kind: 'ObjectValue',
-                  fields: [
-                    {
-                      kind: 'ObjectField',
-                      name: { kind: 'Name', value: 'file' },
-                      value: {
-                        kind: 'Variable',
-                        name: { kind: 'Name', value: 'file' },
-                      },
-                    },
-                  ],
-                },
-              },
-            ],
-            selectionSet: {
-              kind: 'SelectionSet',
-              selections: [
-                {
-                  kind: 'InlineFragment',
-                  typeCondition: {
-                    kind: 'NamedType',
-                    name: { kind: 'Name', value: 'Error' },
-                  },
-                  selectionSet: {
-                    kind: 'SelectionSet',
-                    selections: [
-                      {
-                        kind: 'Field',
-                        name: { kind: 'Name', value: 'message' },
-                      },
-                    ],
-                  },
-                },
-                {
-                  kind: 'InlineFragment',
-                  typeCondition: {
-                    kind: 'NamedType',
-                    name: { kind: 'Name', value: 'MutationUploadFileSuccess' },
-                  },
-                  selectionSet: {
-                    kind: 'SelectionSet',
-                    selections: [
-                      {
-                        kind: 'Field',
-                        name: { kind: 'Name', value: 'data' },
-                        selectionSet: {
-                          kind: 'SelectionSet',
-                          selections: [
-                            {
-                              kind: 'Field',
-                              name: { kind: 'Name', value: 'id' },
-                            },
-                          ],
-                        },
-                      },
-                    ],
-                  },
-                },
-              ],
-            },
-          },
-        ],
-      },
-    },
-  ],
-} as unknown as DocumentNode<UploadFileMutation, UploadFileMutationVariables>
-export const AllFilesDocument = {
-  kind: 'Document',
-  definitions: [
-    {
-      kind: 'OperationDefinition',
-      operation: 'query',
-      name: { kind: 'Name', value: 'allFiles' },
-      selectionSet: {
-        kind: 'SelectionSet',
-        selections: [
-          {
-            kind: 'Field',
-            name: { kind: 'Name', value: 'files' },
-            selectionSet: {
-              kind: 'SelectionSet',
-              selections: [
-                { kind: 'Field', name: { kind: 'Name', value: 'id' } },
-                {
-                  kind: 'Field',
-                  name: { kind: 'Name', value: 'originalName' },
-                },
-                { kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
-                { kind: 'Field', name: { kind: 'Name', value: 'status' } },
-              ],
-            },
-          },
-        ],
-      },
-    },
-  ],
-} as unknown as DocumentNode<AllFilesQuery, AllFilesQueryVariables>
-export const DeleteFileDocument = {
-  kind: 'Document',
-  definitions: [
-    {
-      kind: 'OperationDefinition',
-      operation: 'mutation',
-      name: { kind: 'Name', value: 'DeleteFile' },
-      variableDefinitions: [
-        {
-          kind: 'VariableDefinition',
-          variable: {
-            kind: 'Variable',
-            name: { kind: 'Name', value: 'fileId' },
-          },
-          type: {
-            kind: 'NonNullType',
-            type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
-          },
-        },
-      ],
-      selectionSet: {
-        kind: 'SelectionSet',
-        selections: [
-          {
-            kind: 'Field',
-            name: { kind: 'Name', value: 'deleteFileUpload' },
-            arguments: [
-              {
-                kind: 'Argument',
-                name: { kind: 'Name', value: 'fileId' },
-                value: {
-                  kind: 'Variable',
-                  name: { kind: 'Name', value: 'fileId' },
-                },
-              },
-            ],
-            selectionSet: {
-              kind: 'SelectionSet',
-              selections: [
-                { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
-                {
-                  kind: 'InlineFragment',
-                  typeCondition: {
-                    kind: 'NamedType',
-                    name: { kind: 'Name', value: 'Error' },
-                  },
-                  selectionSet: {
-                    kind: 'SelectionSet',
-                    selections: [
-                      {
-                        kind: 'Field',
-                        name: { kind: 'Name', value: 'message' },
-                      },
-                    ],
-                  },
-                },
-                {
-                  kind: 'InlineFragment',
-                  typeCondition: {
-                    kind: 'NamedType',
-                    name: {
-                      kind: 'Name',
-                      value: 'MutationDeleteFileUploadSuccess',
-                    },
-                  },
-                  selectionSet: {
-                    kind: 'SelectionSet',
-                    selections: [
-                      { kind: 'Field', name: { kind: 'Name', value: 'data' } },
-                    ],
-                  },
-                },
-              ],
-            },
-          },
-        ],
-      },
-    },
-  ],
-} as unknown as DocumentNode<DeleteFileMutation, DeleteFileMutationVariables>
-export const MagicLinkDocument = {
-  kind: 'Document',
-  definitions: [
-    {
-      kind: 'OperationDefinition',
-      operation: 'mutation',
-      name: { kind: 'Name', value: 'MagicLink' },
-      variableDefinitions: [
-        {
-          kind: 'VariableDefinition',
-          variable: {
-            kind: 'Variable',
-            name: { kind: 'Name', value: 'email' },
-          },
-          type: {
-            kind: 'NonNullType',
-            type: {
-              kind: 'NamedType',
-              name: { kind: 'Name', value: 'String' },
-            },
-          },
-        },
-      ],
-      selectionSet: {
-        kind: 'SelectionSet',
-        selections: [
-          {
-            kind: 'Field',
-            name: { kind: 'Name', value: 'magicLink' },
-            arguments: [
-              {
-                kind: 'Argument',
-                name: { kind: 'Name', value: 'email' },
-                value: {
-                  kind: 'Variable',
-                  name: { kind: 'Name', value: 'email' },
-                },
-              },
-            ],
-            selectionSet: {
-              kind: 'SelectionSet',
-              selections: [
-                { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
-                {
-                  kind: 'InlineFragment',
-                  typeCondition: {
-                    kind: 'NamedType',
-                    name: { kind: 'Name', value: 'Error' },
-                  },
-                  selectionSet: {
-                    kind: 'SelectionSet',
-                    selections: [
-                      {
-                        kind: 'Field',
-                        name: { kind: 'Name', value: 'message' },
-                      },
-                    ],
-                  },
-                },
-                {
-                  kind: 'InlineFragment',
-                  typeCondition: {
-                    kind: 'NamedType',
-                    name: { kind: 'Name', value: 'MutationMagicLinkSuccess' },
-                  },
-                  selectionSet: {
-                    kind: 'SelectionSet',
-                    selections: [
-                      { kind: 'Field', name: { kind: 'Name', value: 'data' } },
-                    ],
-                  },
-                },
-              ],
-            },
-          },
-        ],
-      },
-    },
-  ],
-} as unknown as DocumentNode<MagicLinkMutation, MagicLinkMutationVariables>
 export const ConversationSubDocument = {
   kind: 'Document',
   definitions: [
@@ -996,6 +746,22 @@ export const DeleteConversationDocument = {
               kind: 'SelectionSet',
               selections: [
                 { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: { kind: 'Name', value: 'Error' },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'message' },
+                      },
+                    ],
+                  },
+                },
               ],
             },
           },
@@ -1006,6 +772,184 @@ export const DeleteConversationDocument = {
 } as unknown as DocumentNode<
   DeleteConversationMutation,
   DeleteConversationMutationVariables
+>
+export const RenameConversationDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'mutation',
+      name: { kind: 'Name', value: 'RenameConversation' },
+      variableDefinitions: [
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'conversationId' },
+          },
+          type: {
+            kind: 'NonNullType',
+            type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
+          },
+        },
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'title' },
+          },
+          type: {
+            kind: 'NonNullType',
+            type: {
+              kind: 'NamedType',
+              name: { kind: 'Name', value: 'String' },
+            },
+          },
+        },
+      ],
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'renameConversation' },
+            arguments: [
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'conversationId' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'conversationId' },
+                },
+              },
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'title' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'title' },
+                },
+              },
+            ],
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: { kind: 'Name', value: 'Error' },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'message' },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<
+  RenameConversationMutation,
+  RenameConversationMutationVariables
+>
+export const ArchiveConversationDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'mutation',
+      name: { kind: 'Name', value: 'ArchiveConversation' },
+      variableDefinitions: [
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'conversationId' },
+          },
+          type: {
+            kind: 'NonNullType',
+            type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
+          },
+        },
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'archived' },
+          },
+          type: {
+            kind: 'NonNullType',
+            type: {
+              kind: 'NamedType',
+              name: { kind: 'Name', value: 'Boolean' },
+            },
+          },
+        },
+      ],
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'archiveConversation' },
+            arguments: [
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'conversationId' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'conversationId' },
+                },
+              },
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'archived' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'archived' },
+                },
+              },
+            ],
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: { kind: 'Name', value: 'Error' },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'message' },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<
+  ArchiveConversationMutation,
+  ArchiveConversationMutationVariables
 >
 export const AllConversationsDocument = {
   kind: 'Document',
@@ -1026,6 +970,7 @@ export const AllConversationsDocument = {
                 { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
                 { kind: 'Field', name: { kind: 'Name', value: 'id' } },
                 { kind: 'Field', name: { kind: 'Name', value: 'title' } },
+                { kind: 'Field', name: { kind: 'Name', value: 'archived' } },
                 {
                   kind: 'Field',
                   name: { kind: 'Name', value: 'messages' },

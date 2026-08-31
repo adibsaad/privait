@@ -19,3 +19,7 @@ Procfile
 # Rust / Tauri
 src-tauri/target/
 src-tauri/gen/
+# TypeScript incremental build / compiled config artifacts
+*.tsbuildinfo
+src/frontend/vite.config.d.mts
+src/frontend/vite.config.mjs

@@ -276,7 +276,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ws_subscription_streams_ping() {
+    async fn ws_subscription_streams_conversation() {
         use std::time::Duration;
 
         use futures_util::{SinkExt, StreamExt};
@@ -313,12 +313,18 @@ mod tests {
         .await
         .unwrap();
 
+        // No provider configured in the test DB, so the subscription streams
+        // a single `Error` union arm and completes — a full transport
+        // round-trip (subscribe → next → complete) through the real resolver.
         tokio::time::timeout(Duration::from_secs(5), async {
             ws.send(Message::text(
                 json!({
                     "id": "1",
                     "type": "subscribe",
-                    "payload": { "query": "subscription { ping }" }
+                    "payload": {
+                        "query": "subscription($conversationId: Int, $message: String!) { conversation(conversationId: $conversationId, message: $message) { __typename ... on Error { message } } }",
+                        "variables": { "conversationId": null, "message": "hi" }
+                    }
                 })
                 .to_string(),
             ))
@@ -328,22 +334,18 @@ mod tests {
             let first = ws.next().await.unwrap().unwrap();
             let payload: Value = serde_json::from_str(first.to_text().unwrap()).unwrap();
             assert_eq!(payload["type"], "next");
-            assert!(payload["payload"]["data"]["ping"]
+            assert_eq!(
+                payload["payload"]["data"]["conversation"]["__typename"],
+                json!("Error")
+            );
+            assert!(payload["payload"]["data"]["conversation"]["message"]
                 .as_str()
                 .unwrap()
-                .starts_with("tick"));
+                .contains("not configured"));
 
-            let mut count = 1;
-            while let Ok(Some(msg)) = tokio::time::timeout(Duration::from_secs(5), ws.next()).await
-            {
-                let payload: Value = serde_json::from_str(msg.unwrap().to_text().unwrap()).unwrap();
-                match payload["type"].as_str() {
-                    Some("next") => count += 1,
-                    Some("complete") => break,
-                    other => panic!("unexpected message: {other:?}"),
-                }
-            }
-            assert_eq!(count, 3);
+            let last = ws.next().await.unwrap().unwrap();
+            let payload: Value = serde_json::from_str(last.to_text().unwrap()).unwrap();
+            assert_eq!(payload["type"], "complete");
         })
         .await
         .unwrap();
