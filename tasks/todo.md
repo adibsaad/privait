@@ -46,3 +46,9 @@ M2 — Chat parity (SQLite + sqlite-vec, apalis `jobs.db`, schema skeleton, Apol
 ## CI note (M1 wrap-up)
 
 - Legacy CI plumbing dropped on user request (was scheduled for parity): docker-compose/Postgres/db-setup steps and `src/server` tests removed; `test-and-lint` job renamed `frontend` and now runs lint + frontend vitest only. `src/server` stays frozen in the repo (still linted) until M4 deletes it.
+
+## Test additions (M1 hardening, user-approved)
+
+- Rust (+5 → 18 tests): schema SDL snapshot (`src-tauri/schema.snapshot.graphql`, refresh with `PRIVAIT_UPDATE_SCHEMA_SNAPSHOT=1 cargo test`); FK cascade on conversation delete; cosine ≥0.5 similarity threshold over KNN results (app-side filter pinned); WS upgrade rejected on wrong/missing token.
+- Frontend (+4 → 5 tests): Apollo link-chain runtime test — queries → httpLink (+URL), auth header only in Tauri mode, WS client gets `?token=` URL, upload link registered with base URL. Mocks `lib/tauri`, `graphql-ws`, upload link.
+- Deferred: webview e2e (tauri-driver), multipart upload round-trip (M3), apalis retry behavior (wire retry layer with the real M3 handler).

@@ -86,3 +86,40 @@ pub fn build_schema(db: Db) -> AppSchema {
         .data(db)
         .finish()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::path::PathBuf;
+
+    /// The checked-in SDL is the porting contract: any schema change must be a
+    /// reviewed diff here, and M4's parity gate diffs this against the old
+    /// server's `schema.graphql` (minus auth).
+    const SNAPSHOT_PATH: &str = "schema.snapshot.graphql";
+
+    fn snapshot_path() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(SNAPSHOT_PATH)
+    }
+
+    #[test]
+    fn schema_sdl_matches_snapshot() {
+        let manager = r2d2_sqlite::SqliteConnectionManager::memory();
+        let db = r2d2::Pool::builder().max_size(1).build(manager).unwrap();
+        let sdl = build_schema(db).sdl();
+
+        let path = snapshot_path();
+        if std::env::var("PRIVAIT_UPDATE_SCHEMA_SNAPSHOT").is_ok() {
+            std::fs::write(&path, &sdl).unwrap();
+        }
+
+        let expected = std::fs::read_to_string(&path).unwrap_or_else(|err| {
+            panic!(
+                "missing schema snapshot at {} (set PRIVAIT_UPDATE_SCHEMA_SNAPSHOT=1 and run cargo test to create it): {err}",
+                path.display()
+            )
+        });
+
+        assert_eq!(sdl, expected, "GraphQL schema drifted from {SNAPSHOT_PATH}");
+    }
+}

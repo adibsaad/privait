@@ -231,6 +231,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ws_upgrade_rejects_wrong_token() {
+        assert_ws_upgrade_rejected(&format!(
+            "ws://127.0.0.1:{}/graphql?token=not-the-token",
+            spawn_test_server().await
+        ))
+        .await;
+    }
+
+    #[tokio::test]
+    async fn ws_upgrade_rejects_missing_token() {
+        assert_ws_upgrade_rejected(&format!(
+            "ws://127.0.0.1:{}/graphql",
+            spawn_test_server().await
+        ))
+        .await;
+    }
+
+    async fn spawn_test_server() -> u16 {
+        let listener = bind().unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(serve(listener, test_schema(), generate_token()));
+        port
+    }
+
+    async fn assert_ws_upgrade_rejected(url: &str) {
+        use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::HeaderValue, Error};
+
+        let mut request = url.into_client_request().unwrap();
+        request.headers_mut().insert(
+            "Sec-WebSocket-Protocol",
+            HeaderValue::from_static("graphql-transport-ws"),
+        );
+
+        let error = tokio_tungstenite::connect_async(request).await.unwrap_err();
+        match error {
+            Error::Http(response) => assert_eq!(
+                response.status(),
+                StatusCode::UNAUTHORIZED,
+                "upgrade without a valid token must be rejected"
+            ),
+            other => panic!("expected HTTP rejection, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn ws_subscription_streams_ping() {
         use std::time::Duration;
 

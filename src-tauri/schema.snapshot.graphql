@@ -1,0 +1,41 @@
+type Query {
+	"""
+	Liveness check for the in-process API server.
+	"""
+	health: String!
+	"""
+	Resolves locally; kept so the frontend's user context keeps working.
+	"""
+	currentUser: user!
+}
+
+type Subscription {
+	"""
+	Trivial streaming subscription used by the M1 WS smoke test.
+	"""
+	ping: String!
+}
+
+"""
+The single local user; no auth machinery exists in the desktop app.
+"""
+type user {
+	id: ID!
+	email: String!
+	firstName: String
+	lastName: String
+	pictureUrl: String
+}
+
+"""
+Directs the executor to include this field or fragment only when the `if` argument is true.
+"""
+directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+"""
+Directs the executor to skip this field or fragment when the `if` argument is true.
+"""
+directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+schema {
+	query: Query
+	subscription: Subscription
+}

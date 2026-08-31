@@ -254,4 +254,89 @@ mod tests {
             Some("http://127.0.0.1:11434/v1")
         );
     }
+
+    #[test]
+    fn deleting_conversation_cascades_to_messages() {
+        let (_dir, pool) = temp_db();
+        let conn = pool.get().unwrap();
+
+        conn.execute(
+            "INSERT INTO conversations (id, title, created_at, updated_at) VALUES (1, 't', '0', '0')",
+            [],
+        )
+        .unwrap();
+        for role in ["USER", "ASSISTANT"] {
+            conn.execute(
+                "INSERT INTO messages (id, conversation_id, role, content, created_at)
+                 VALUES (NULL, 1, ?1, 'hello', '0')",
+                [role],
+            )
+            .unwrap();
+        }
+
+        conn.execute("DELETE FROM conversations WHERE id = 1", [])
+            .unwrap();
+
+        let messages: i64 = conn
+            .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(messages, 0, "messages must cascade with their conversation");
+    }
+
+    #[test]
+    fn cosine_knn_distances_support_the_half_similarity_threshold() {
+        let (_dir, pool) = temp_db();
+        let conn = pool.get().unwrap();
+
+        // 384-dim unit vectors at distinct angles from the query (1,0,…):
+        // "keep" at 0° (cosine distance 0, similarity 1), "borderline" at 60°
+        // (distance 0.5, similarity 0.5), "drop" at 90° (distance 1) —
+        // mirroring the M3 retrieval filter (similarity ≥ 0.5).
+        let sparse = |lead: f32, second: f32| {
+            let mut embedding = vec![0.0f32; 384];
+            embedding[0] = lead;
+            embedding[1] = second;
+            embedding_to_blob(&embedding)
+        };
+
+        for (content, vector) in [
+            ("keep", sparse(1.0, 0.0)),
+            ("borderline", sparse(0.5, 0.75f32.sqrt())),
+            ("drop", sparse(0.0, 1.0)),
+        ] {
+            conn.execute(
+                "INSERT INTO file_chunks (embedding, content, file_id) VALUES (?1, ?2, 1)",
+                rusqlite::params![vector, content],
+            )
+            .unwrap();
+        }
+
+        let query_blob = sparse(1.0, 0.0);
+        let mut stmt = conn
+            .prepare(
+                "SELECT content, distance FROM file_chunks
+                 WHERE embedding MATCH ?1 ORDER BY distance LIMIT 4",
+            )
+            .unwrap();
+        let knn: Vec<(String, f64)> = stmt
+            .query_map(rusqlite::params![query_blob], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+
+        // The threshold is applied to the KNN results app-side (vec0 does not
+        // accept `distance` as a WHERE filter): similarity = 1 - distance.
+        let above_threshold: Vec<&str> = knn
+            .iter()
+            .filter(|(_, distance)| (1.0 - *distance) >= 0.5 - f64::EPSILON)
+            .map(|(content, _)| content.as_str())
+            .collect();
+
+        assert!(above_threshold.contains(&"keep"));
+        assert!(above_threshold.contains(&"borderline"));
+        assert!(!above_threshold.contains(&"drop"));
+        assert_eq!(knn.len(), 3);
+    }
 }
