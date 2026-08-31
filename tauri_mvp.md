@@ -100,10 +100,10 @@ Errors: keep the `Error { message }` / `XSuccess` union pattern.
 - [x] CI: add `cargo fmt/clippy/test` jobs; keep existing pnpm jobs (docker-compose steps removed at parity, not now)
 
 ### M1 — Core plumbing
-- [ ] SQLite migrations + rusqlite pool (content DB), sqlite-vec extension loaded; apalis worker runtime boots with its own `jobs.db`
-- [ ] async-graphql schema skeleton: error unions, `Upload` scalar (multipart), `currentUser`, settings storage
-- [ ] Frontend: repoint Apollo (httpLink uri, `GraphQLWsLink`, upload link), delete login/magic-link pages, `AuthRoute`, jwt hook
-- [ ] Streaming smoke test: trivial subscription round-trips to the webview
+- [x] SQLite migrations + rusqlite pool (content DB), sqlite-vec extension loaded; apalis worker runtime boots with its own `jobs.db`
+- [x] async-graphql schema skeleton: error unions, `Upload` scalar (multipart), `currentUser`, settings storage
+- [x] Frontend: repoint Apollo (httpLink uri, `GraphQLWsLink`, upload link), delete login/magic-link pages, `AuthRoute`, jwt hook
+- [x] Streaming smoke test: trivial subscription round-trips to the webview
 
 ### M2 — Chat parity
 - [ ] Port `ChatProvider` trait + `OpenAiCompatProvider` (streaming SSE → broadcast channel)
