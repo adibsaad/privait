@@ -1,6 +1,7 @@
 {
   "name": "privait",
   "version": "0.1.0",
+  "license": "AGPL-3.0-only",
   "scripts": {
     "codegen": "graphql-codegen --config codegen.ts",
     "codegen:watch": "graphql-codegen --config codegen.ts -w",
