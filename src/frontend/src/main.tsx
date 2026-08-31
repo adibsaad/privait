@@ -2,7 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { RouterProvider } from 'react-router-dom'
 
-import { ApolloProvider } from '@apollo/client'
+import { ApolloProvider } from '@apollo/client/react'
 import { Toaster } from 'sonner'
 
 import './index.css'

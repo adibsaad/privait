@@ -95,9 +95,9 @@ Errors: keep the `Error { message }` / `XSuccess` union pattern.
 ## Milestones
 
 ### M0 — Scaffold
-- [ ] Add `src-tauri/` (Tauri 2 + axum + async-graphql skeleton), wire `devUrl` → Vite :4000
-- [ ] Rust server boots in-process on a free localhost port; frontend gets the URL via a Tauri command; app opens to existing UI
-- [ ] CI: add `cargo fmt/clippy/test` jobs; keep existing pnpm jobs (docker-compose steps removed at parity, not now)
+- [x] Add `src-tauri/` (Tauri 2 + axum + async-graphql skeleton), wire `devUrl` → Vite :4000
+- [x] Rust server boots in-process on a free localhost port; frontend gets the URL via a Tauri command; app opens to existing UI
+- [x] CI: add `cargo fmt/clippy/test` jobs; keep existing pnpm jobs (docker-compose steps removed at parity, not now)
 
 ### M1 — Core plumbing
 - [ ] SQLite migrations + rusqlite pool (content DB), sqlite-vec extension loaded; apalis worker runtime boots with its own `jobs.db`
