@@ -23,6 +23,13 @@ import {
   GetConversationDocument,
   RenameConversationDocument,
 } from '@frontend/graphql/output/graphql'
+import {
+  appendAssistantChunk,
+  dropNewThreadBucket,
+  reconcileFirstChunk,
+  userMessage,
+  withOptimisticUserMessage,
+} from '@frontend/providers/chat-threads'
 
 gql(/* GraphQL */ `
   subscription ConversationSub($conversationId: Int, $message: String!) {
@@ -118,6 +125,8 @@ export function ApolloChatRuntimeProvider({
 
     // todo: don't create a new thread each time, just go to the existing new one
     onSwitchToNewThread: () => {
+      // Drop any optimistic messages left in the "new thread" bucket.
+      setThreads(prev => dropNewThreadBucket(prev))
       setCurrentThreadId(EMPTY_THREAD_ID)
     },
 
@@ -241,25 +250,13 @@ export function ApolloChatRuntimeProvider({
         if (!gotFirstChunkRef.current) {
           gotFirstChunkRef.current = true
 
-          const userMessage: ThreadMessageLike = {
-            role: 'user',
-            content: nextMessage.msg,
-            id: previousMessageId,
-            // attachments: {
-            // }
-          }
-
-          setThreads(prev => {
-            // Only add the user message if it's not already there
-            if (prev.get(threadId)?.find(m => m.id === previousMessageId)) {
-              return prev
-            }
-
-            return new Map(prev).set(threadId, [
-              ...(prev.get(threadId) || []).filter(m => m.id !== 'temp'),
-              userMessage,
-            ])
-          })
+          setThreads(prev =>
+            reconcileFirstChunk(
+              prev,
+              threadId,
+              userMessage(previousMessageId, nextMessage.msg),
+            ),
+          )
 
           setThreadList(prev => {
             // Only add the thread to the list if it's not there already
@@ -300,45 +297,9 @@ export function ApolloChatRuntimeProvider({
           })
         }
 
-        setThreads(prev => {
-          if (!prev.get(threadId)?.length) {
-            return prev
-          }
-
-          if (prev.get(threadId)?.find(m => m.id === messageId)) {
-            return new Map(prev).set(
-              threadId,
-              (prev.get(threadId) || []).map(m =>
-                m.id === messageId
-                  ? {
-                      ...m,
-                      id: messageId,
-                      content: [
-                        {
-                          type: 'text',
-                          text: (m.content[0] as any).text + chunk,
-                        },
-                      ],
-                    }
-                  : m,
-              ),
-            )
-          } else {
-            return new Map(prev).set(threadId, [
-              ...(prev.get(threadId) || []),
-              {
-                id: messageId,
-                role: 'assistant',
-                content: [
-                  {
-                    type: 'text',
-                    text: chunk,
-                  },
-                ],
-              },
-            ])
-          }
-        })
+        setThreads(prev =>
+          appendAssistantChunk(prev, threadId, messageId, chunk),
+        )
 
         setCurrentThreadId(threadId)
       }
@@ -350,6 +311,12 @@ export function ApolloChatRuntimeProvider({
     const content = message.content[0]
     if (content && typeof content !== 'string') {
       if (content.type === 'text') {
+        // Optimistically show the user's message right away; the persisted
+        // id arrives with the first streamed chunk and replaces it.
+        setThreads(prev =>
+          withOptimisticUserMessage(prev, currentThreadId, content.text),
+        )
+
         nextMessageSet({
           msg: content.text,
           conversationId: Number(currentThreadId),
