@@ -114,6 +114,19 @@ User decision: settings storage = the M1 `settings(key, value)` SQLite table (al
 - [x] Restored layer order: auth INSIDE CORS (route → auth → cors → body limit) in `build_router`; `cors_layer()`/`body_limit()` factored out.
 - [x] Tests (3): `cors_preflight_is_answered_without_credentials` (preflight → 200 + allow-origin on the token-gated router; wrong-token POST still 401s), `cors_allows_tauri_and_any_loopback_browser_origin`, `cors_rejects_non_utf8_origins`. 53 Rust tests green, clippy clean.
 
+### Sidebar follow-ups (user-reported)
+
+- [x] New-chat flow is now fully optimistic: sending the first message immediately shows + selects a pending "New Chat" sidebar entry (withOptimisticThread / reconcileThreadList) while the optimistic message + loading state render in the thread; first chunk swaps in the real id and title. (+5 chat-threads tests → 23 frontend)
+- [x] Streaming hardened: a provider that stalls anywhere before the first chunk (connection, headers, or tokens) now fails loudly after a 30s budget ("Provider did not respond within 30s") instead of an endless spinner — budget injectable via build_schema_with_timeout for tests.
+- [x] "Missing" chats explained: they were ARCHIVED via the ··· menu and the sidebar had no archived section — invisible and unrecoverable. Thread list now renders an Archived section (fallback-titled, muted) with Unarchive + Delete; unarchive persists via archiveConversation(archived:false). Verified in browser against the live DB.
+
+### Settings window revamp (user follow-up)
+
+- [x] Archived chats hidden from the main sidebar again (archived section removed from thread-list.tsx).
+- [x] Settings dialog redesigned: internal left-rail navigation with two sections — `Provider` (existing base URL / API key / model + Save) and `Archived chats` (titles only, Unarchive per row, empty state). Unarchive uses the archiveConversation mutation and shares the normalized Apollo cache with the main thread list, so the sidebar updates instantly; toast on success.
+- [x] Cleaned 72 stray `tsc -b` transpile artifacts (*.js) polluting src/ + eslint; artifacts gitignored.
+- [x] Verified in browser against the live DB: main sidebar hides archived, settings lists them by title, unarchive moves them back instantly.
+
 ## Next
 
 M3 — Files + RAG parity (restore the real Files page from git history when its schema lands).

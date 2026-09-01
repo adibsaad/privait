@@ -1,6 +1,7 @@
 import { ThreadMessageLike } from '@assistant-ui/react'
 
 import { EMPTY_THREAD_ID } from '@frontend/config/consts'
+import type { Thread } from '@frontend/context/thread'
 
 // Optimistic user messages get this id until the backend's persisted id
 // arrives with the first streamed chunk.
@@ -120,4 +121,34 @@ export function dropNewThreadBucket(threads: ThreadsMap): ThreadsMap {
   const next = new Map(threads)
   next.delete(EMPTY_THREAD_ID)
   return next
+}
+
+/**
+ * Optimistically shows the in-progress new chat in the sidebar (selected,
+ * fallback title) the moment the first message is sent — before the backend
+ * has created the conversation.
+ */
+export function withOptimisticThread(threadList: Thread[]): Thread[] {
+  if (threadList.some(t => t.id === EMPTY_THREAD_ID)) {
+    return threadList
+  }
+  return [{ id: EMPTY_THREAD_ID, status: 'regular', title: '' }, ...threadList]
+}
+
+/**
+ * Swaps the optimistic sidebar entry for the real conversation once its id
+ * arrives with the first streamed chunk.
+ */
+export function reconcileThreadList(
+  threadList: Thread[],
+  threadId: string,
+): Thread[] {
+  const withoutPending = threadList.filter(t => t.id !== EMPTY_THREAD_ID)
+  if (withoutPending.some(t => t.id === threadId)) {
+    if (withoutPending.length === threadList.length) {
+      return threadList
+    }
+    return withoutPending
+  }
+  return [{ id: threadId, status: 'regular', title: '' }, ...withoutPending]
 }

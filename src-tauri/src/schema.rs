@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use async_graphql::{Context, Enum, InputObject, Object, SimpleObject, Subscription, Union, ID};
 use futures_util::StreamExt;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -598,6 +600,12 @@ impl Subscription {
         let (tx, rx) = tokio::sync::mpsc::channel::<SubscriptionConversationResult>(64);
         let chunk_db = db.clone();
 
+        // Bound on time-to-first-chunk so a hung provider can't leave the
+        // composer spinning forever; overridable for tests.
+        let first_chunk_timeout = ctx
+            .data::<FirstChunkTimeout>()
+            .map(|t| t.0)
+            .unwrap_or(Duration::from_secs(30));
         tokio::spawn(async move {
             let request = ChatRequest {
                 model: provider.model().to_string(),
@@ -605,51 +613,90 @@ impl Subscription {
             };
 
             let mut accumulated = String::new();
+            let mut failed = false;
 
-            match provider.stream_chat(request).await {
-                Err(err) => {
+            // Connection, response headers, and the first chunk share one
+            // budget: a provider that stalls anywhere before streaming must
+            // surface as an Error arm instead of an endless spinner. Once
+            // streaming, slower generations are expected.
+            let opened = match tokio::time::timeout(first_chunk_timeout, async {
+                let mut stream = provider.stream_chat(request).await?;
+                let first = stream.next().await;
+                Ok::<_, crate::provider::ProviderError>((stream, first))
+            })
+            .await
+            {
+                Ok(Ok(outcome)) => Some(outcome),
+                Ok(Err(err)) => {
                     let _ = tx
                         .send(SubscriptionConversationResult::Error(GqlError::new(
                             err.to_string(),
                         )))
                         .await;
+                    failed = true;
+                    None
                 }
-                Ok(mut chunks) => {
-                    while let Some(item) = chunks.next().await {
-                        match item {
-                            Ok(chunk) => {
-                                let emitted = tx
-                                    .send(SubscriptionConversationResult::SubscriptionConversationSuccess(
-                                        SubscriptionConversationSuccess {
-                                            data: ConversationMessageChunk {
-                                                conversation_id: ID(conversation_id.to_string()),
-                                                previous_message_id: ID(user_message_id.to_string()),
-                                                message_id: ID(assistant_message_id.to_string()),
-                                                message_chunk: chunk.clone(),
-                                                done: Some(false),
-                                            },
+                Err(_) => {
+                    let _ = tx
+                        .send(SubscriptionConversationResult::Error(GqlError::new(
+                            format!(
+                                "Provider did not respond within {}s",
+                                first_chunk_timeout.as_secs()
+                            ),
+                        )))
+                        .await;
+                    failed = true;
+                    None
+                }
+            };
+
+            if let Some((mut stream, first)) = opened {
+                let mut pending_first = Some(first);
+                loop {
+                    let item = match pending_first.take() {
+                        Some(item) => item,
+                        None => stream.next().await,
+                    };
+
+                    match item {
+                        Some(Ok(chunk)) => {
+                            let emitted = tx
+                                .send(SubscriptionConversationResult::SubscriptionConversationSuccess(
+                                    SubscriptionConversationSuccess {
+                                        data: ConversationMessageChunk {
+                                            conversation_id: ID(conversation_id.to_string()),
+                                            previous_message_id: ID(user_message_id.to_string()),
+                                            message_id: ID(assistant_message_id.to_string()),
+                                            message_chunk: chunk.clone(),
+                                            done: Some(false),
                                         },
-                                    ))
-                                    .await;
-                                if emitted.is_err() {
-                                    // Subscriber went away (stop button or
-                                    // disconnect) — abort the request and
-                                    // keep what streamed so far.
-                                    break;
-                                }
-                                accumulated.push_str(&chunk);
-                            }
-                            Err(err) => {
-                                let _ = tx
-                                    .send(SubscriptionConversationResult::Error(GqlError::new(
-                                        err.to_string(),
-                                    )))
-                                    .await;
+                                    },
+                                ))
+                                .await;
+                            if emitted.is_err() {
+                                // Subscriber went away (stop button or
+                                // disconnect) — abort the request and
+                                // keep what streamed so far.
+                                failed = true;
                                 break;
                             }
+                            accumulated.push_str(&chunk);
                         }
+                        Some(Err(err)) => {
+                            let _ = tx
+                                .send(SubscriptionConversationResult::Error(GqlError::new(
+                                    err.to_string(),
+                                )))
+                                .await;
+                            failed = true;
+                            break;
+                        }
+                        // Provider closed the stream — treat as done.
+                        None => break,
                     }
+                }
 
+                if !failed {
                     let _ = tx
                         .send(
                             SubscriptionConversationResult::SubscriptionConversationSuccess(
@@ -683,11 +730,27 @@ impl Subscription {
     }
 }
 
+/// Time budget for the provider's first streamed chunk; a hung provider
+/// surfaces as an Error arm instead of a stuck composer.
+#[derive(Debug, Clone, Copy)]
+pub struct FirstChunkTimeout(pub Duration);
+
+impl Default for FirstChunkTimeout {
+    fn default() -> Self {
+        Self(Duration::from_secs(30))
+    }
+}
+
 pub type AppSchema = async_graphql::Schema<Query, Mutation, Subscription>;
 
 pub fn build_schema(db: Db) -> AppSchema {
+    build_schema_with_timeout(db, FirstChunkTimeout::default().0)
+}
+
+pub fn build_schema_with_timeout(db: Db, timeout: Duration) -> AppSchema {
     async_graphql::Schema::build(Query, Mutation, Subscription)
         .data(db)
+        .data(FirstChunkTimeout(timeout))
         .finish()
 }
 
@@ -755,6 +818,60 @@ mod tests {
         let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         base_url
+    }
+
+    #[tokio::test]
+    async fn subscription_fails_loudly_when_the_provider_never_responds() {
+        let db = test_db();
+        {
+            let conn = db.get().unwrap();
+            // Squat on the port: connections are accepted but nothing is
+            // ever read — the provider appears hung.
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                loop {
+                    let (socket, _) = listener.accept().await.unwrap();
+                    tokio::spawn(async move {
+                        socket.writable().await.unwrap();
+                        tokio::time::sleep(Duration::from_secs(10)).await;
+                    });
+                }
+            });
+            let base_url = format!("http://{addr}/v1");
+            seed_provider_settings(&conn, &base_url).await;
+        }
+
+        // 300ms budget instead of the default 30s.
+        let schema = build_schema_with_timeout(db.clone(), Duration::from_millis(300));
+        let mut stream = schema.execute_stream(subscription_request(None, "hi"));
+
+        let started = std::time::Instant::now();
+        let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .unwrap()
+            .unwrap();
+        let elapsed = started.elapsed();
+
+        let payload = payload_item(first);
+        assert_eq!(payload["conversation"]["__typename"], json!("Error"));
+        assert!(
+            error_message(&payload).unwrap().contains("did not respond"),
+            "got: {:?}",
+            error_message(&payload)
+        );
+        assert!(elapsed < Duration::from_secs(2), "took {elapsed:?}");
+
+        // The empty assistant placeholder stays empty; user message intact.
+        let conn = db.get().unwrap();
+        let assistant: Option<String> = conn
+            .query_row(
+                "SELECT content FROM messages WHERE role = 'ASSISTANT' LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(assistant, Some(String::new()));
     }
 
     const SUBSCRIPTION_QUERY: &str = r#"

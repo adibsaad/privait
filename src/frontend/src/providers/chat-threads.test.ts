@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { EMPTY_THREAD_ID } from '@frontend/config/consts'
+import type { Thread } from '@frontend/context/thread'
 
 import type { ThreadsMap } from './chat-threads'
 import {
@@ -8,7 +9,9 @@ import {
   assistantChunkMessage,
   dropNewThreadBucket,
   reconcileFirstChunk,
+  reconcileThreadList,
   userMessage,
+  withOptimisticThread,
   withOptimisticUserMessage,
 } from './chat-threads'
 
@@ -153,5 +156,65 @@ describe('dropNewThreadBucket', () => {
     const threads: ThreadsMap = new Map([['7', history]])
 
     expect(dropNewThreadBucket(threads)).toBe(threads)
+  })
+})
+
+describe('withOptimisticThread', () => {
+  it('shows a pending selected chat at the top of the sidebar', () => {
+    const next = withOptimisticThread([
+      { id: '7', status: 'regular' as const, title: 'old' },
+    ])
+
+    expect(next[0]).toEqual({
+      id: EMPTY_THREAD_ID,
+      status: 'regular' as const,
+      title: '',
+    })
+    expect(next[1]).toEqual({
+      id: '7',
+      status: 'regular' as const,
+      title: 'old',
+    })
+  })
+
+  it('never stacks a second pending entry', () => {
+    const seeded = withOptimisticThread([])
+
+    expect(withOptimisticThread(seeded)).toBe(seeded)
+  })
+})
+
+describe('reconcileThreadList', () => {
+  it('swaps the pending entry for the real conversation', () => {
+    const list: Thread[] = [
+      { id: EMPTY_THREAD_ID, status: 'regular' as const, title: '' },
+      { id: '7', status: 'regular' as const, title: 'old' },
+    ]
+
+    const next = reconcileThreadList(list, '9')
+
+    expect(next).toEqual([
+      { id: '9', status: 'regular' as const, title: '' },
+      { id: '7', status: 'regular' as const, title: 'old' },
+    ])
+    expect(next.some(t => t.id === EMPTY_THREAD_ID)).toBe(false)
+  })
+
+  it('keeps the existing entry when switching threads mid-list', () => {
+    const list = [
+      { id: '9', status: 'regular' as const, title: 't' },
+      { id: '7', status: 'regular' as const, title: 'old' },
+    ]
+
+    expect(reconcileThreadList(list, '9')).toBe(list)
+  })
+
+  it('adds the real thread when no pending entry existed yet', () => {
+    const list = [{ id: '7', status: 'regular' as const, title: 'old' }]
+
+    const next = reconcileThreadList(list, '9')
+
+    expect(next[0].id).toBe('9')
+    expect(next).toHaveLength(2)
   })
 })

@@ -28,7 +28,9 @@ import {
   appendAssistantChunk,
   dropNewThreadBucket,
   reconcileFirstChunk,
+  reconcileThreadList,
   userMessage,
+  withOptimisticThread,
   withOptimisticUserMessage,
 } from '@frontend/providers/chat-threads'
 
@@ -264,21 +266,7 @@ export function ApolloChatRuntimeProvider({
             ),
           )
 
-          setThreadList(prev => {
-            // Only add the thread to the list if it's not there already
-            if (prev.find(t => t.id === threadId)) {
-              return prev
-            }
-
-            return [
-              {
-                id: threadId,
-                status: 'regular',
-                title: '', // will be updated later
-              },
-              ...prev,
-            ]
-          })
+          setThreadList(prev => reconcileThreadList(prev, threadId))
 
           loadConversation({
             variables: {
@@ -322,6 +310,11 @@ export function ApolloChatRuntimeProvider({
         setThreads(prev =>
           withOptimisticUserMessage(prev, currentThreadId, content.text),
         )
+        // Brand-new chats also appear in the sidebar immediately, selected
+        // with a fallback title, and get their real id on the first chunk.
+        if (currentThreadId === EMPTY_THREAD_ID) {
+          setThreadList(prev => withOptimisticThread(prev))
+        }
 
         nextMessageSet({
           msg: content.text,
