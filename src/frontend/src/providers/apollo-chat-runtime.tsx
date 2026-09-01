@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 import { gql } from '@apollo/client'
 import {
@@ -96,6 +97,9 @@ export function ApolloChatRuntimeProvider({
   children: React.ReactNode
 }) {
   const gotFirstChunkRef = useRef(false)
+  // Selecting a thread (from the sidebar, on any route) must land the user
+  // on the chat page.
+  const navigate = useNavigate()
   const [nextMessage, nextMessageSet] = useState<{
     msg: string
     conversationId: number | null
@@ -128,10 +132,12 @@ export function ApolloChatRuntimeProvider({
       // Drop any optimistic messages left in the "new thread" bucket.
       setThreads(prev => dropNewThreadBucket(prev))
       setCurrentThreadId(EMPTY_THREAD_ID)
+      navigate('/chat')
     },
 
     onSwitchToThread: threadId => {
       setCurrentThreadId(threadId)
+      navigate('/chat')
     },
 
     onRename: (threadId, newTitle) => {

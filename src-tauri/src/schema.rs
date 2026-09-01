@@ -450,6 +450,27 @@ fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
 
+/// Derives a conversation title from the user's first prompt: whitespace
+/// collapsed, hard-truncated on a word boundary with an ellipsis. A
+/// summarizer model will take over title generation later; users can always
+/// rename via the sidebar.
+fn conversation_title(prompt: &str) -> String {
+    let collapsed = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    if collapsed.is_empty() {
+        return "Untitled chat".to_string();
+    }
+
+    const MAX_CHARS: usize = 50;
+    if collapsed.chars().count() <= MAX_CHARS {
+        return collapsed;
+    }
+
+    let head: String = collapsed.chars().take(MAX_CHARS).collect();
+    let cut = head.rfind(' ').unwrap_or(MAX_CHARS);
+    format!("{}…", head[..cut].trim_end())
+}
+
 fn select_messages(conn: &Connection, conversation_id: i64) -> rusqlite::Result<Vec<GqlMessage>> {
     let mut stmt = conn.prepare(
         "SELECT id, role, content FROM messages
@@ -535,7 +556,7 @@ impl Subscription {
                 let now = now_iso();
                 conn.execute(
                     "INSERT INTO conversations (title, created_at, updated_at) VALUES (?1, ?2, ?3)",
-                    params!["Untitled chat", now, now],
+                    params![conversation_title(&message), now, now],
                 )?;
                 conn.last_insert_rowid()
             }
@@ -812,10 +833,15 @@ mod tests {
         assert!(saw_done);
 
         let conn = db.get().unwrap();
-        let conversation_count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM conversations", [], |r| r.get(0))
+        let (conversation_count, title): (i64, String) = conn
+            .query_row(
+                "SELECT COUNT(*), (SELECT title FROM conversations ORDER BY id DESC LIMIT 1) FROM conversations",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
         assert_eq!(conversation_count, 1);
+        assert_eq!(title, "hi", "title comes from the first prompt");
 
         let messages = select_messages(&conn, 1).unwrap();
         assert_eq!(messages.len(), 2);
@@ -1224,6 +1250,41 @@ mod tests {
             serde_json::to_value(&response.data).unwrap()["saveSettings"]["message"],
             json!("Model must not be empty")
         );
+    }
+
+    #[test]
+    fn title_from_prompt_truncates_on_word_boundary() {
+        let prompt = "explain how the kill switch aborts the provider request mid stream";
+
+        let title = conversation_title(prompt);
+
+        assert!(title.ends_with('…'));
+        assert!(title.chars().count() <= 51);
+        let stem = title.trim_end_matches('…');
+        assert!(
+            prompt.starts_with(stem),
+            "cut must stay on a word boundary: {title}"
+        );
+        assert!(!stem.ends_with(' '));
+    }
+
+    #[test]
+    fn title_from_prompt_collapses_whitespace() {
+        assert_eq!(
+            conversation_title("hello\n\n   world \t there"),
+            "hello world there"
+        );
+    }
+
+    #[test]
+    fn title_from_prompt_keeps_short_prompts_verbatim() {
+        assert_eq!(conversation_title("hi"), "hi");
+    }
+
+    #[test]
+    fn title_from_prompt_falls_back_for_empty_prompt() {
+        assert_eq!(conversation_title(""), "Untitled chat");
+        assert_eq!(conversation_title("   \n  "), "Untitled chat");
     }
 
     /// The checked-in SDL is the porting contract: any schema change must be a
