@@ -1,0 +1,1 @@
+Privait smoke test: the tiny file is one chunk.
