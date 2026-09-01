@@ -127,6 +127,11 @@ User decision: settings storage = the M1 `settings(key, value)` SQLite table (al
 - [x] Cleaned 72 stray `tsc -b` transpile artifacts (*.js) polluting src/ + eslint; artifacts gitignored.
 - [x] Verified in browser against the live DB: main sidebar hides archived, settings lists them by title, unarchive moves them back instantly.
 
+### Message action rows (user follow-up)
+
+- [x] Assistant message: hover row keeps Copy only (Refresh + More/export removed); footer is a reserved min-h-6 slot with hover/focus-revealed buttons — hovering no longer shifts content below (measured 0px shift, live).
+- [x] User message: dead Edit pencil removed (and dead EditComposer); Copy sits below the bubble, right-aligned, in a reserved min-h-7 row — same no-shift pattern.
+
 ## Next
 
 M3 — Files + RAG parity (restore the real Files page from git history when its schema lands).
