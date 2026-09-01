@@ -132,9 +132,46 @@ User decision: settings storage = the M1 `settings(key, value)` SQLite table (al
 - [x] Assistant message: hover row keeps Copy only (Refresh + More/export removed); footer is a reserved min-h-6 slot with hover/focus-revealed buttons — hovering no longer shifts content below (measured 0px shift, live).
 - [x] User message: dead Edit pencil removed (and dead EditComposer); Copy sits below the bubble, right-aligned, in a reserved min-h-7 row — same no-shift pattern.
 
+## M3 — Files + RAG parity ✅
+
+### Backend (src-tauri) ✅
+
+- [x] `storage.rs`: OpenDAL wrapper (`=0.54.1`, services-fs + services-memory) behind a tiny module — production over app-data `files/`, tests use the in-memory service. Round-trip/delete tests (plain-files-on-disk pinned).
+- [x] `files.rs`: port of `file-upload.ts` — same 5MB cap + MIME allowlist (same error strings), `<uuid>.<ext>` stored names replacing `uploads/{userId}/{cuid}`, store/list/delete (delete removes storage object + row + `file_chunks`).
+- [x] `embeddings.rs`: `Embedder` trait + `FastEmbedder` (fastembed `=6.0.2`, bge-small-en-v1.5, 384-dim) with **lazy** model init (first-launch download doesn't block startup; lives in app-data `models/`) + deterministic `FakeEmbedder` for tests.
+- [x] `jobs.rs`: real `process_uploaded_file` — storage read → pdf-extract (`=0.12.0`) / lossy utf-8 → ported chunker (512/64) → embed → `file_chunks` → status PROCESSED + processed_at. Worker closure captures `PipelineDeps { db, storage, embedder }` (no apalis data-layer API risk).
+- [x] `retrieval.rs`: port of `query-embedding.ts` — KNN top-4 over memories + file_chunks, app-side similarity ≥ 0.5 filter; query embedded once per turn.
+- [x] `schema.rs`: `files` query, `uploadFile`/`deleteFileUpload` mutations with Error unions (`MutationUploadFileSuccess { data: FileUpload! }`, `MutationDeleteFileUploadSuccess { data: Boolean! }` — old names), `FileUpload`/`FileType`/`FileStatus` SDL names match the old schema, `Upload` scalar (async-graphql default tempfile feature). Subscription now grounds turns: history → `Here are some related memories: …` → `Here are some related file chunks: …` → user message; embed failure degrades to an ungrounded turn (first-launch download) instead of failing chat.
+- [x] `lib.rs`/examples wiring: real storage + embedder + queue in the app, `serve_dev`, and `chat_smoke`; new `rag_smoke` example (real-embedding retrieval against the live DB).
+- [x] Schema snapshot refreshed (`Upload` scalar + `@specifiedBy` directive are new).
+- [x] Tests: 78 Rust (from 53) — storage round-trips, validation table, stored-name uniqueness, store/delete round-trip, multipart upload through the real router (graphql-multipart-request-spec body), oversize/disallowed-MIME errors, upload → worker → PROCESSED end-to-end with chunk vectors, corrupt-PDF keeps UPLOADED, delete removes row+chunks+bytes ("File not found" preserved), retrieval threshold/ordering/dimension-guard, grounding system-context injection pinned message-by-message against a capturing mock provider, empty-grounding passthrough, files query shape.
+
+### Frontend (src/frontend) ✅
+
+- [x] Files page restored from git history (`uploadFile` + `allFiles` + `DeleteFile` documents, FileDrop, table, delete dropdown, toast on Error arm, `resetStore` on success); `createdAt` rendered via `new Date()`; empty state instead of the "No files found" dead frame.
+- [x] `file-drop.tsx` input got `data-testid` for tests.
+- [x] Codegen regenerated from the updated schema snapshot; Apollo upload link already splits `uploadFile` (M1).
+- [x] Tests: +4 → 27 (list with status/date, empty state, delete-failure toast, upload flow via stub link asserting the File rides the mutation + UI refresh).
+- [x] Verify: `tsc -b` green, vite build green, eslint 0 errors, `vitest run` 27/27.
+
+### Live verification (real app data dir + real provider)
+
+- [x] Browser: uploaded `browser-test.md` via drag-drop input → UPLOADED → worker processed 14 chunks → PROCESSED (bge model auto-downloaded to `models/` on first embed); delete via the row menu removed everything (`files` query empty).
+- [x] `cargo run --example rag_smoke "…embeddings and retrieval…"` — top-4 chunks ≥0.5 retrieved with real bge embeddings against the live DB.
+- [x] `cargo run --example chat_smoke` — grounded chat turn still streams + persists ("pong", 2 chunks, 2.9s).
+
+### Review (M3)
+
+- **fastembed `embed` is `&mut self`** → model wrapped in `Arc<tokio::sync::Mutex<…>>`, used from `spawn_blocking` with `blocking_lock`. Lazy init via `tokio::sync::OnceCell` so app startup never waits on the model download.
+- **Upload push-job failure** rolls back the upload (storage + row) instead of stranding a file in UPLOADED forever; queue-less schemas (plain test `build_schema`) return a clean `File storage is not available` / skip the queue.
+- **Multipart** needed no new feature in async-graphql v7 (default `tempfile` covers `Upload`); the axum extractor already routes multipart bodies through `receive_batch_body`.
+- **Retrieval threshold stays app-side** (vec0 can't WHERE on distance) — the db.rs KNN test and retrieval tests pin the ≥0.5 behavior.
+- Old `MockedProvider` can't deep-match a `File` variable, so the upload test drives the page with a stub `ApolloLink` (asserts operation name + File attachment + UI refresh) while the other three tests use `MockedProvider`.
+- Files page ordering matches the old resolver (`id ASC`), not the old service (`createdAt DESC`).
+
 ## Next
 
-M3 — Files + RAG parity (restore the real Files page from git history when its schema lands).
+M4 — Ship the shell (schema parity diff, provider smoke vs OpenRouter + local ollama, `tauri build` → dmg, delete `src/server`/docker, manual smoke checklist).
 
 ## CI note (M1 wrap-up)
 
@@ -144,4 +181,4 @@ M3 — Files + RAG parity (restore the real Files page from git history when its
 
 - Rust (+5 → 18 tests): schema SDL snapshot (`src-tauri/schema.snapshot.graphql`, refresh with `PRIVAIT_UPDATE_SCHEMA_SNAPSHOT=1 cargo test`); FK cascade on conversation delete; cosine ≥0.5 similarity threshold over KNN results (app-side filter pinned); WS upgrade rejected on wrong/missing token.
 - Frontend (+4 → 5 tests): Apollo link-chain runtime test — queries → httpLink (+URL), auth header only in Tauri mode, WS client gets `?token=` URL, upload link registered with base URL. Mocks `lib/tauri`, `graphql-ws`, upload link.
-- Deferred: webview e2e (tauri-driver), multipart upload round-trip (M3), apalis retry behavior (wire retry layer with the real M3 handler).
+- Deferred: webview e2e (tauri-driver), apalis retry behavior (retry layer still optional; M3 pipelines fail per-job with a logged error and leave status UPLOADED).

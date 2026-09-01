@@ -27,6 +27,8 @@ export type Scalars = {
   Boolean: { input: boolean; output: boolean }
   Int: { input: number; output: number }
   Float: { input: number; output: number }
+  /** A multipart file upload */
+  Upload: { input: any; output: any }
 }
 
 export type Conversation = {
@@ -55,6 +57,33 @@ export type Error = {
   message: Scalars['String']['output']
 }
 
+export enum FileStatus {
+  Processed = 'PROCESSED',
+  Uploaded = 'UPLOADED',
+}
+
+export enum FileType {
+  Pdf = 'PDF',
+  Text = 'TEXT',
+}
+
+export type FileUpload = {
+  __typename?: 'FileUpload'
+  createdAt: Scalars['String']['output']
+  id: Scalars['ID']['output']
+  originalName: Scalars['String']['output']
+  status: FileStatus
+  type: FileType
+}
+
+/**
+ * `input: FileUploadInput!` — kept for the old schema's shape even though it
+ * only carries the upload.
+ */
+export type FileUploadInput = {
+  file: Scalars['Upload']['input']
+}
+
 export type Message = {
   __typename?: 'Message'
   content: Scalars['String']['output']
@@ -72,8 +101,16 @@ export type Mutation = {
   __typename?: 'Mutation'
   archiveConversation: MutationArchiveConversationResult
   deleteConversation: MutationDeleteConversationResult
+  /** Removes the upload, its stored bytes, and its vector chunks. */
+  deleteFileUpload: MutationDeleteFileUploadResult
   renameConversation: MutationRenameConversationResult
   saveSettings: MutationSaveSettingsResult
+  /**
+   * Persists a validated upload (5MB cap, MIME allowlist) to storage and
+   * the `files` table, then enqueues the process-file job. The row is
+   * returned with status UPLOADED; the worker flips it to PROCESSED.
+   */
+  uploadFile: MutationUploadFileResult
 }
 
 export type MutationArchiveConversationArgs = {
@@ -85,6 +122,10 @@ export type MutationDeleteConversationArgs = {
   conversationId: Scalars['Int']['input']
 }
 
+export type MutationDeleteFileUploadArgs = {
+  fileId: Scalars['Int']['input']
+}
+
 export type MutationRenameConversationArgs = {
   conversationId: Scalars['Int']['input']
   title: Scalars['String']['input']
@@ -92,6 +133,10 @@ export type MutationRenameConversationArgs = {
 
 export type MutationSaveSettingsArgs = {
   input: SettingsInput
+}
+
+export type MutationUploadFileArgs = {
+  input: FileUploadInput
 }
 
 export type MutationArchiveConversationResult =
@@ -112,6 +157,15 @@ export type MutationDeleteConversationSuccess = {
   data: Scalars['Boolean']['output']
 }
 
+export type MutationDeleteFileUploadResult =
+  | Error
+  | MutationDeleteFileUploadSuccess
+
+export type MutationDeleteFileUploadSuccess = {
+  __typename?: 'MutationDeleteFileUploadSuccess'
+  data: Scalars['Boolean']['output']
+}
+
 export type MutationRenameConversationResult =
   | Error
   | MutationRenameConversationSuccess
@@ -128,12 +182,21 @@ export type MutationSaveSettingsSuccess = {
   data: Settings
 }
 
+export type MutationUploadFileResult = Error | MutationUploadFileSuccess
+
+export type MutationUploadFileSuccess = {
+  __typename?: 'MutationUploadFileSuccess'
+  data: FileUpload
+}
+
 export type Query = {
   __typename?: 'Query'
   conversation?: Maybe<Conversation>
   conversations: Array<Conversation>
   /** Resolves locally; kept so the frontend's user context keeps working. */
   currentUser: User
+  /** All uploaded files, oldest first (matches the old resolver's ordering). */
+  files: Array<FileUpload>
   /** Liveness check for the in-process API server. */
   health: Scalars['String']['output']
   settings: Settings
@@ -239,6 +302,44 @@ export type CurrentUserQuery = {
     email: string
     pictureUrl?: string | null
   }
+}
+
+export type UploadFileMutationVariables = Exact<{
+  file: Scalars['Upload']['input']
+}>
+
+export type UploadFileMutation = {
+  __typename?: 'Mutation'
+  uploadFile:
+    | { __typename?: 'Error'; message: string }
+    | {
+        __typename?: 'MutationUploadFileSuccess'
+        data: { __typename?: 'FileUpload'; id: string }
+      }
+}
+
+export type AllFilesQueryVariables = Exact<{ [key: string]: never }>
+
+export type AllFilesQuery = {
+  __typename?: 'Query'
+  files: Array<{
+    __typename?: 'FileUpload'
+    id: string
+    originalName: string
+    createdAt: string
+    status: FileStatus
+  }>
+}
+
+export type DeleteFileMutationVariables = Exact<{
+  fileId: Scalars['Int']['input']
+}>
+
+export type DeleteFileMutation = {
+  __typename?: 'Mutation'
+  deleteFileUpload:
+    | { __typename: 'Error'; message: string }
+    | { __typename: 'MutationDeleteFileUploadSuccess'; data: boolean }
 }
 
 export type ConversationSubSubscriptionVariables = Exact<{
@@ -524,6 +625,214 @@ export const CurrentUserDocument = {
     },
   ],
 } as unknown as DocumentNode<CurrentUserQuery, CurrentUserQueryVariables>
+export const UploadFileDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'mutation',
+      name: { kind: 'Name', value: 'uploadFile' },
+      variableDefinitions: [
+        {
+          kind: 'VariableDefinition',
+          variable: { kind: 'Variable', name: { kind: 'Name', value: 'file' } },
+          type: {
+            kind: 'NonNullType',
+            type: {
+              kind: 'NamedType',
+              name: { kind: 'Name', value: 'Upload' },
+            },
+          },
+        },
+      ],
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'uploadFile' },
+            arguments: [
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'input' },
+                value: {
+                  kind: 'ObjectValue',
+                  fields: [
+                    {
+                      kind: 'ObjectField',
+                      name: { kind: 'Name', value: 'file' },
+                      value: {
+                        kind: 'Variable',
+                        name: { kind: 'Name', value: 'file' },
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: { kind: 'Name', value: 'Error' },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'message' },
+                      },
+                    ],
+                  },
+                },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: { kind: 'Name', value: 'MutationUploadFileSuccess' },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'data' },
+                        selectionSet: {
+                          kind: 'SelectionSet',
+                          selections: [
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'id' },
+                            },
+                          ],
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<UploadFileMutation, UploadFileMutationVariables>
+export const AllFilesDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'query',
+      name: { kind: 'Name', value: 'allFiles' },
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'files' },
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                { kind: 'Field', name: { kind: 'Name', value: 'id' } },
+                {
+                  kind: 'Field',
+                  name: { kind: 'Name', value: 'originalName' },
+                },
+                { kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
+                { kind: 'Field', name: { kind: 'Name', value: 'status' } },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<AllFilesQuery, AllFilesQueryVariables>
+export const DeleteFileDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'mutation',
+      name: { kind: 'Name', value: 'DeleteFile' },
+      variableDefinitions: [
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'fileId' },
+          },
+          type: {
+            kind: 'NonNullType',
+            type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
+          },
+        },
+      ],
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'deleteFileUpload' },
+            arguments: [
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'fileId' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'fileId' },
+                },
+              },
+            ],
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: { kind: 'Name', value: 'Error' },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'message' },
+                      },
+                    ],
+                  },
+                },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: {
+                      kind: 'Name',
+                      value: 'MutationDeleteFileUploadSuccess',
+                    },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      { kind: 'Field', name: { kind: 'Name', value: 'data' } },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<DeleteFileMutation, DeleteFileMutationVariables>
 export const ConversationSubDocument = {
   kind: 'Document',
   definitions: [

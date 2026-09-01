@@ -21,6 +21,32 @@ type Error {
 	message: String!
 }
 
+enum FileStatus {
+	UPLOADED
+	PROCESSED
+}
+
+enum FileType {
+	PDF
+	TEXT
+}
+
+type FileUpload {
+	id: ID!
+	originalName: String!
+	type: FileType!
+	status: FileStatus!
+	createdAt: String!
+}
+
+"""
+`input: FileUploadInput!` — kept for the old schema's shape even though it
+only carries the upload.
+"""
+input FileUploadInput {
+	file: Upload!
+}
+
 type Message {
 	id: ID!
 	role: MessageRole!
@@ -38,6 +64,16 @@ type Mutation {
 	renameConversation(conversationId: Int!, title: String!): MutationRenameConversationResult!
 	archiveConversation(conversationId: Int!, archived: Boolean!): MutationArchiveConversationResult!
 	saveSettings(input: SettingsInput!): MutationSaveSettingsResult!
+	"""
+	Persists a validated upload (5MB cap, MIME allowlist) to storage and
+	the `files` table, then enqueues the process-file job. The row is
+	returned with status UPLOADED; the worker flips it to PROCESSED.
+	"""
+	uploadFile(input: FileUploadInput!): MutationUploadFileResult!
+	"""
+	Removes the upload, its stored bytes, and its vector chunks.
+	"""
+	deleteFileUpload(fileId: Int!): MutationDeleteFileUploadResult!
 }
 
 union MutationArchiveConversationResult = Error | MutationArchiveConversationSuccess
@@ -49,6 +85,12 @@ type MutationArchiveConversationSuccess {
 union MutationDeleteConversationResult = Error | MutationDeleteConversationSuccess
 
 type MutationDeleteConversationSuccess {
+	data: Boolean!
+}
+
+union MutationDeleteFileUploadResult = Error | MutationDeleteFileUploadSuccess
+
+type MutationDeleteFileUploadSuccess {
 	data: Boolean!
 }
 
@@ -64,6 +106,12 @@ type MutationSaveSettingsSuccess {
 	data: Settings!
 }
 
+union MutationUploadFileResult = Error | MutationUploadFileSuccess
+
+type MutationUploadFileSuccess {
+	data: FileUpload!
+}
+
 type Query {
 	"""
 	Liveness check for the in-process API server.
@@ -76,6 +124,10 @@ type Query {
 	conversations: [Conversation!]!
 	conversation(conversationId: Int!): Conversation
 	settings: Settings!
+	"""
+	All uploaded files, oldest first (matches the old resolver's ordering).
+	"""
+	files: [FileUpload!]!
 }
 
 type Settings {
@@ -110,6 +162,11 @@ type SubscriptionConversationSuccess {
 }
 
 """
+A multipart file upload
+"""
+scalar Upload
+
+"""
 The single local user; no auth machinery exists in the desktop app.
 """
 type user {
@@ -128,6 +185,10 @@ directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
 Directs the executor to skip this field or fragment when the `if` argument is true.
 """
 directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+"""
+Provides a scalar specification URL for specifying the behavior of custom scalar types.
+"""
+directive @specifiedBy(url: String!) on SCALAR
 schema {
 	query: Query
 	mutation: Mutation

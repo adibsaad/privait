@@ -112,11 +112,11 @@ Errors: keep the `Error { message }` / `XSuccess` union pattern.
 - [x] Port chunker + streaming unit tests from `src/server/llm/chunker.test.ts`
 - [x] Settings UI pulled forward from M4: `settings` query + `saveSettings` mutation + dialog in Nav (base URL / API key / model, blank defaults — chat errors until configured)
 
-### M3 — Files + RAG parity
-- [ ] `uploadFile`/`files`/`deleteFileUpload` → OpenDAL fs operator + `files` table, same validation (5MB, MIME allowlist)
-- [ ] `process-file` apalis task: pdf-extract / read text → tiktoken-rs chunk (512/64) → fastembed-rs embeddings → `file_chunks`
-- [ ] Retrieval: cosine top-4 memories + top-4 chunks (≥0.5) injected as system context in the chat pipeline
-- [ ] Files page parity: status UPLOADED→PROCESSED, delete removes file + chunks
+### M3 — Files + RAG parity ✅
+- [x] `uploadFile`/`files`/`deleteFileUpload` → OpenDAL fs operator + `files` table, same validation (5MB, MIME allowlist)
+- [x] `process-file` apalis task: pdf-extract / read text → tiktoken-rs chunk (512/64) → fastembed-rs embeddings → `file_chunks`
+- [x] Retrieval: cosine top-4 memories + top-4 chunks (≥0.5) injected as system context in the chat pipeline
+- [x] Files page parity: status UPLOADED→PROCESSED, delete removes file + chunks
 
 ### M4 — Ship the shell
 - [ ] Schema parity check: introspected async-graphql schema diffs clean against old `schema.graphql` (minus auth)

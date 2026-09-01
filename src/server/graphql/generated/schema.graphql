@@ -27,6 +27,32 @@ type Error {
   message: String!
 }
 
+enum FileStatus {
+  PROCESSED
+  UPLOADED
+}
+
+enum FileType {
+  PDF
+  TEXT
+}
+
+type FileUpload {
+  createdAt: String!
+  id: ID!
+  originalName: String!
+  status: FileStatus!
+  type: FileType!
+}
+
+"""
+`input: FileUploadInput!` — kept for the old schema's shape even though it
+only carries the upload.
+"""
+input FileUploadInput {
+  file: Upload!
+}
+
 type Message {
   content: String!
   id: ID!
@@ -42,8 +68,16 @@ enum MessageRole {
 type Mutation {
   archiveConversation(archived: Boolean!, conversationId: Int!): MutationArchiveConversationResult!
   deleteConversation(conversationId: Int!): MutationDeleteConversationResult!
+  """Removes the upload, its stored bytes, and its vector chunks."""
+  deleteFileUpload(fileId: Int!): MutationDeleteFileUploadResult!
   renameConversation(conversationId: Int!, title: String!): MutationRenameConversationResult!
   saveSettings(input: SettingsInput!): MutationSaveSettingsResult!
+  """
+  Persists a validated upload (5MB cap, MIME allowlist) to storage and
+  the `files` table, then enqueues the process-file job. The row is
+  returned with status UPLOADED; the worker flips it to PROCESSED.
+  """
+  uploadFile(input: FileUploadInput!): MutationUploadFileResult!
 }
 
 union MutationArchiveConversationResult = Error | MutationArchiveConversationSuccess
@@ -55,6 +89,12 @@ type MutationArchiveConversationSuccess {
 union MutationDeleteConversationResult = Error | MutationDeleteConversationSuccess
 
 type MutationDeleteConversationSuccess {
+  data: Boolean!
+}
+
+union MutationDeleteFileUploadResult = Error | MutationDeleteFileUploadSuccess
+
+type MutationDeleteFileUploadSuccess {
   data: Boolean!
 }
 
@@ -70,11 +110,21 @@ type MutationSaveSettingsSuccess {
   data: Settings!
 }
 
+union MutationUploadFileResult = Error | MutationUploadFileSuccess
+
+type MutationUploadFileSuccess {
+  data: FileUpload!
+}
+
 type Query {
   conversation(conversationId: Int!): Conversation
   conversations: [Conversation!]!
   """Resolves locally; kept so the frontend's user context keeps working."""
   currentUser: user!
+  """
+  All uploaded files, oldest first (matches the old resolver's ordering).
+  """
+  files: [FileUpload!]!
   """Liveness check for the in-process API server."""
   health: String!
   settings: Settings!
@@ -110,6 +160,9 @@ union SubscriptionConversationResult = Error | SubscriptionConversationSuccess
 type SubscriptionConversationSuccess {
   data: ConversationMessageChunk!
 }
+
+"""A multipart file upload"""
+scalar Upload
 
 """The single local user; no auth machinery exists in the desktop app."""
 type user {

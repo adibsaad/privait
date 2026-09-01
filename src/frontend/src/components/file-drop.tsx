@@ -23,7 +23,7 @@ export function FileDrop({
       {...getRootProps()}
       className="hover:bg-muted cursor-pointer rounded-lg border p-8 text-center transition"
     >
-      <input {...getInputProps()} disabled={loading} />
+      <input data-testid="file-input" {...getInputProps()} disabled={loading} />
 
       <div className="text-muted-foreground flex flex-col items-center gap-2">
         <Upload className="h-6 w-6" />

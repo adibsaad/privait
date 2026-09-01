@@ -7,6 +7,9 @@ use rusqlite::{Connection, OptionalExtension};
 /// Content database connection pool. One shared `privait.db` file.
 pub type Db = Pool<SqliteConnectionManager>;
 
+/// Embedding width shared by the vec0 tables and the embedder (bge-small).
+pub const EMBEDDING_DIM: usize = 384;
+
 static REGISTER_VEC: Once = Once::new();
 
 // Statically linked by build.rs from the vendored sqlite-vec amalgamation
