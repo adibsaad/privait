@@ -2,7 +2,7 @@ use std::net::TcpListener;
 
 use axum::{
     extract::{Request, State},
-    http::{header, HeaderValue, Method, StatusCode},
+    http::{header, Method, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::post_service,
@@ -12,17 +12,25 @@ use tower_http::cors::CorsLayer;
 
 use crate::schema::AppSchema;
 
-/// Origins allowed to call the API from a browser context.
-///
-/// Dev serves the webview from Vite (:4000); packaged builds use Tauri's
-/// custom protocols. Everything else is rejected by CORS — non-browser
-/// callers are rejected by the bearer-token middleware below.
-const ALLOWED_ORIGINS: [&str; 4] = [
-    "http://localhost:4000",
-    "http://127.0.0.1:4000",
-    "tauri://localhost",
-    "http://tauri.localhost",
-];
+/// Browser origins allowed to call the API. Dev serves the webview from
+/// Vite (which may pick any port when 4000 is taken), packaged builds use
+/// Tauri's custom protocols. CORS is a browser-only mitigation here — other
+/// local processes are gated by the bearer-token middleware instead — so any
+/// loopback browser origin is fine.
+fn origin_allowed(origin: &axum::http::HeaderValue, _parts: &axum::http::request::Parts) -> bool {
+    let value = match origin.to_str() {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+
+    let is_loopback_host = value.starts_with("http://localhost:")
+        || value.starts_with("http://127.0.0.1:")
+        // Vite can omit the port for the default.
+        || value == "http://localhost"
+        || value == "http://127.0.0.1";
+
+    is_loopback_host || value == "tauri://localhost" || value == "http://tauri.localhost"
+}
 
 /// A per-launch random token; requests must present it as a bearer token.
 pub fn generate_token() -> String {
@@ -44,27 +52,21 @@ pub async fn serve(
     schema: AppSchema,
     token: String,
 ) -> std::io::Result<()> {
+    serve_router(listener, build_router(schema, token)).await
+}
+
+/// Serves a prebuilt router — token-free variant for `serve_dev`.
+pub async fn serve_router(listener: std::net::TcpListener, router: Router) -> std::io::Result<()> {
     listener.set_nonblocking(true)?;
     let listener = tokio::net::TcpListener::from_std(listener)?;
-    let router = build_router(schema, token);
 
     axum::serve(listener, router).await
 }
 
-pub fn build_router(schema: AppSchema, token: String) -> Router {
-    let allowed_origins: Vec<HeaderValue> = ALLOWED_ORIGINS
-        .iter()
-        .map(|origin| origin.parse().expect("valid origin"))
-        .collect();
-
-    let cors = CorsLayer::new()
-        .allow_origin(allowed_origins)
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::ACCEPT]);
-
-    // 5MB file cap plus multipart framing headroom.
-    let upload_limit = axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024);
-
+/// The GraphQL router with CORS and body limits but no bearer-token gate.
+/// Useful for tests and the dev-only `serve_dev` example; production uses
+/// `build_router`.
+pub fn router_without_auth(schema: AppSchema) -> Router {
     let ws_schema = schema.clone();
     Router::new()
         .route(
@@ -72,9 +74,37 @@ pub fn build_router(schema: AppSchema, token: String) -> Router {
             post_service(async_graphql_axum::GraphQL::new(schema))
                 .get_service(async_graphql_axum::GraphQLSubscription::new(ws_schema)),
         )
+        .layer(cors_layer())
+        .layer(body_limit())
+}
+
+pub fn build_router(schema: AppSchema, token: String) -> Router {
+    let ws_schema = schema.clone();
+    Router::new()
+        .route(
+            "/graphql",
+            post_service(async_graphql_axum::GraphQL::new(schema))
+                .get_service(async_graphql_axum::GraphQLSubscription::new(ws_schema)),
+        )
+        // Auth INSIDE CORS: browsers won't send credentials on preflight
+        // OPTIONS requests, so CORS must short-circuit them first. (An
+        // outer auth layer 401s every preflight and the app silently
+        // loads empty in the webview.)
         .layer(middleware::from_fn_with_state(token, require_bearer))
-        .layer(cors)
-        .layer(upload_limit)
+        .layer(cors_layer())
+        .layer(body_limit())
+}
+
+fn cors_layer() -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin(tower_http::cors::AllowOrigin::predicate(origin_allowed))
+        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::ACCEPT])
+}
+
+fn body_limit() -> axum::extract::DefaultBodyLimit {
+    // 5MB file cap plus multipart framing headroom.
+    axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024)
 }
 
 async fn require_bearer(State(expected): State<String>, req: Request, next: Next) -> Response {
@@ -200,6 +230,73 @@ mod tests {
         let (status, _) = post_graphql(&mut router, Some("wrong-token"), "{ health }").await;
 
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    /// Regression: preflight OPTIONS carries no Authorization header, so the
+    /// CORS layer must answer before the bearer middleware sees it. When the
+    /// auth layer was (wrongly) outermost, the webview loaded with an empty
+    /// sidebar because every preflight came back 401.
+    fn request_parts() -> axum::http::request::Parts {
+        axum::http::Request::<()>::new(()).into_parts().0
+    }
+
+    #[test]
+    fn cors_allows_tauri_and_any_loopback_browser_origin() {
+        let parts = request_parts();
+
+        let allowed =
+            |origin: &str| origin_allowed(&header::HeaderValue::from_str(origin).unwrap(), &parts);
+
+        assert!(allowed("tauri://localhost"));
+        assert!(allowed("http://tauri.localhost"));
+        // Vite drifts ports when 4000 is taken.
+        assert!(allowed("http://localhost:4000"));
+        assert!(allowed("http://localhost:4001"));
+        assert!(allowed("http://127.0.0.1:5173"));
+
+        assert!(!allowed("https://evil.example"));
+        assert!(!allowed("http://evil.example"));
+    }
+
+    #[test]
+    fn cors_rejects_non_utf8_origins() {
+        let parts = request_parts();
+        let bytes = [0xff, 0xfe];
+        let bad = header::HeaderValue::from_bytes(&bytes).unwrap();
+
+        assert!(!origin_allowed(&bad, &parts));
+    }
+
+    #[tokio::test]
+    async fn cors_preflight_is_answered_without_credentials() {
+        use axum::http::{header as http_header, HeaderValue};
+
+        let token = generate_token();
+        let router = build_router(test_schema(), token);
+
+        let request = HttpRequest::options("/graphql")
+            .header(http_header::ORIGIN, "tauri://localhost")
+            .header(http_header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
+            .header(
+                header::ACCESS_CONTROL_REQUEST_HEADERS,
+                "content-type, authorization",
+            )
+            .body(Body::empty())
+            .unwrap();
+        let response = router.oneshot(request).await.unwrap();
+
+        assert_eq!(
+            response.status(),
+            StatusCode::OK,
+            "preflight must not require a token"
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .cloned(),
+            Some(HeaderValue::from_static("tauri://localhost"))
+        );
     }
 
     #[tokio::test]

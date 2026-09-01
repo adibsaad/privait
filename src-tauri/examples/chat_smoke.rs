@@ -13,8 +13,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
             let home = std::env::var("HOME").expect("HOME not set");
-            std::path::PathBuf::from(home)
-                .join("Library/Application Support/app.privait.client")
+            std::path::PathBuf::from(home).join("Library/Application Support/app.privait.client")
         });
 
     let db = privait_lib::db::init(&data_dir)?;
@@ -83,7 +82,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             Some("SubscriptionConversationSuccess") => {
                 let chunk_data = &item["data"];
                 if chunk_data["done"].as_bool() == Some(true) {
-                    println!("\n[done after {:.1?}, {chunk_count} chunks]", started.elapsed());
+                    println!(
+                        "\n[done after {:.1?}, {chunk_count} chunks]",
+                        started.elapsed()
+                    );
                 } else {
                     if conversation_id.is_none() {
                         conversation_id = chunk_data["conversationId"].as_str().map(String::from);
@@ -95,7 +97,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 }
             }
             Some("Error") => {
-                eprintln!("\n✗ provider/resolver error: {}", item["message"].as_str().unwrap_or("?"));
+                eprintln!(
+                    "\n✗ provider/resolver error: {}",
+                    item["message"].as_str().unwrap_or("?")
+                );
                 std::process::exit(1);
             }
             other => eprintln!("\n✗ unexpected payload: {other:?}"),

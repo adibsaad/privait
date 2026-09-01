@@ -35,7 +35,7 @@ const ThreadListNew: FC = () => {
     <ThreadListPrimitive.New asChild>
       <Button
         variant="outline"
-        className="aui-thread-list-new data-active:bg-neutral-100 dark:data-active:bg-neutral-800 h-9 justify-start gap-2 rounded-lg px-3 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-800"
+        className="aui-thread-list-new h-9 justify-start gap-2 rounded-lg px-3 text-sm hover:bg-neutral-100 data-[active=true]:bg-neutral-100 dark:hover:bg-neutral-800 dark:data-[active=true]:bg-neutral-800"
       >
         <PlusIcon className="size-4" />
         New Thread
@@ -63,7 +63,7 @@ const ThreadListSkeleton: FC = () => {
 
 const ThreadListItem: FC = () => {
   return (
-    <ThreadListItemPrimitive.Root className="aui-thread-list-item data-active:bg-neutral-100 dark:data-active:bg-neutral-800 group flex h-9 items-center gap-2 rounded-lg transition-colors hover:bg-neutral-100 focus-visible:bg-neutral-100 focus-visible:outline-none dark:hover:bg-neutral-800 dark:focus-visible:bg-neutral-800">
+    <ThreadListItemPrimitive.Root className="aui-thread-list-item group flex h-9 items-center gap-2 rounded-lg transition-colors hover:bg-neutral-100 focus-visible:bg-neutral-100 focus-visible:outline-none data-[active=true]:bg-neutral-100 dark:hover:bg-neutral-800 dark:focus-visible:bg-neutral-800 dark:data-[active=true]:bg-neutral-800">
       <ThreadListItemPrimitive.Trigger className="aui-thread-list-item-trigger flex h-full min-w-0 flex-1 items-center px-3 text-start text-sm">
         <span className="aui-thread-list-item-title min-w-0 flex-1 truncate">
           <ThreadListItemPrimitive.Title fallback="New Chat" />
@@ -81,7 +81,7 @@ const ThreadListItemMore: FC = () => {
         <Button
           variant="ghost"
           size="icon"
-          className="aui-thread-list-item-more group-data-active:opacity-100 mr-2 size-7 p-0 opacity-0 transition-opacity group-hover:opacity-100 data-[state=open]:bg-neutral-100 data-[state=open]:opacity-100 dark:data-[state=open]:bg-neutral-800"
+          className="aui-thread-list-item-more mr-2 size-7 p-0 opacity-0 transition-opacity group-hover:opacity-100 data-[state=open]:bg-neutral-100 data-[state=open]:opacity-100 group-data-[active=true]:opacity-100 dark:data-[state=open]:bg-neutral-800"
         >
           <MoreHorizontalIcon className="size-4" />
           <span className="sr-only">More options</span>

@@ -88,6 +88,32 @@ User decision: settings storage = the M1 `settings(key, value)` SQLite table (al
 - [x] Fixed pre-existing tsc errors (Apollo v4 generics, vitest 3 `vi.fn` signature, unused import) — `pnpm exec tsc -b` is now green and part of the verification flow.
 - [x] Verified in a browser against vite: dark + light modes render correctly, no crash, chat + settings dialog render.
 
+### Sidebar redesign (modeled on Claude desktop)
+
+- [x] Single full-height left sidebar (`app-sidebar.tsx`, shadcn Sidebar): logo top, Chat/Files nav, thread list always visible regardless of route, theme toggle + Settings pinned bottom, avatar dropped
+- [x] Nav header (`nav.tsx`) and chat-embedded `threadlist-sidebar.tsx` deleted; ThreadProvider + ApolloChatRuntimeProvider hoisted to Root so the thread list survives navigation; `assistant.tsx` collapsed into direct `<Thread />`
+- [x] App shell made a definite-height layout: sidebar wrapper `h-svh overflow-hidden` (the vendored shadcn version's `min-h-svh` + `h-full` combo collapsed the sidebar to content height); mobile keeps the built-in Sheet + SidebarTrigger
+- [x] Error page simplified (no header dependency); theme toggle verified functional (Light/Dark/System persist via localStorage)
+- [x] Verified in browser: sidebar 256×800, Files route keeps sidebar + thread list, active nav state, settings dialog, theme switch
+
+### Follow-up fixes (user-reported)
+
+- [x] New conversations title themselves from the first prompt (whitespace collapsed, word-boundary truncate at 50 chars + ellipsis, empty prompt keeps "Untitled chat" fallback) — a summarizer model takes over later; 4 Rust unit tests + assertion in the streaming test
+- [x] Sidebar thread selection now navigates: `onSwitchToThread`/`onSwitchToNewThread` call `navigate('/chat')` (was a no-op when already on /files); verified in browser from /files
+
+### Sidebar chat highlight (user-reported: no visible selection)
+
+- [x] Root cause: `data-active:bg-neutral-100` is Tailwind *v4* bare-data syntax; the repo's v3.4 silently ignores it, so the highlight never generated. Converted to `data-[active=true]:` across thread-list.tsx (item, "New Thread" button, More-options reveal).
+- [x] New `serve_dev` example (`cargo run --example serve_dev`): token-free API on :3000 from the real app DB so plain-web UI work is testable in a browser; extracted `router_without_auth`/`serve_router` in server.rs (prod path unchanged, token gate intact).
+- [x] CORS: origin allowlist → loopback predicate (Vite can drift to other ports; CORS is browser-only mitigation, the bearer token gates other local callers).
+- [x] Verified in browser against live data: active thread bg neutral-800 in dark (transparent on inactive), highlight follows clicks, thread messages load.
+
+### Fix: empty sidebar after the CORS refactor (user-reported)
+
+- [x] Root cause: the router refactor put the bearer-token middleware OUTSIDE the CORS layer; browser preflight OPTIONS carries no Authorization header → 401 → allConversations failed → sidebar loaded empty (chats all intact in the DB; purely a transport bug). My `serve_dev` browser check missed it because that example has no auth layer.
+- [x] Restored layer order: auth INSIDE CORS (route → auth → cors → body limit) in `build_router`; `cors_layer()`/`body_limit()` factored out.
+- [x] Tests (3): `cors_preflight_is_answered_without_credentials` (preflight → 200 + allow-origin on the token-gated router; wrong-token POST still 401s), `cors_allows_tauri_and_any_loopback_browser_origin`, `cors_rejects_non_utf8_origins`. 53 Rust tests green, clippy clean.
+
 ## Next
 
 M3 — Files + RAG parity (restore the real Files page from git history when its schema lands).
