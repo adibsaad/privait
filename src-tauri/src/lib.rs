@@ -1,5 +1,7 @@
+pub mod chunker;
 pub mod db;
 pub mod jobs;
+pub mod provider;
 pub mod schema;
 pub mod server;
 

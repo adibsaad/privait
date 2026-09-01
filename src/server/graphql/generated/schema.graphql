@@ -4,11 +4,8 @@ schema {
   subscription: Subscription
 }
 
-type AuthSuccessResponse {
-  token: String!
-}
-
 type Conversation {
+  archived: Boolean!
   id: ID!
   messages: [Message!]!
   title: String!
@@ -22,32 +19,12 @@ type ConversationMessageChunk {
   previousMessageId: ID!
 }
 
-scalar DateTime
-
+"""
+Shared failure type behind the `Error { message }` union arm pattern
+carried over from the existing schema.
+"""
 type Error {
   message: String!
-}
-
-enum FileStatus {
-  PROCESSED
-  UPLOADED
-}
-
-enum FileType {
-  PDF
-  TEXT
-}
-
-type FileUpload {
-  createdAt: DateTime!
-  id: ID!
-  originalName: String!
-  status: FileStatus!
-  type: FileType!
-}
-
-input FileUploadInput {
-  file: Upload!
 }
 
 type Message {
@@ -63,17 +40,16 @@ enum MessageRole {
 }
 
 type Mutation {
-  completeMagicLink(token: String!): MutationCompleteMagicLinkResult!
+  archiveConversation(archived: Boolean!, conversationId: Int!): MutationArchiveConversationResult!
   deleteConversation(conversationId: Int!): MutationDeleteConversationResult!
-  deleteFileUpload(fileId: Int!): MutationDeleteFileUploadResult!
-  magicLink(email: String!): MutationMagicLinkResult!
-  uploadFile(input: FileUploadInput!): MutationUploadFileResult!
+  renameConversation(conversationId: Int!, title: String!): MutationRenameConversationResult!
+  saveSettings(input: SettingsInput!): MutationSaveSettingsResult!
 }
 
-union MutationCompleteMagicLinkResult = Error | MutationCompleteMagicLinkSuccess
+union MutationArchiveConversationResult = Error | MutationArchiveConversationSuccess
 
-type MutationCompleteMagicLinkSuccess {
-  data: AuthSuccessResponse!
+type MutationArchiveConversationSuccess {
+  data: Boolean!
 }
 
 union MutationDeleteConversationResult = Error | MutationDeleteConversationSuccess
@@ -82,33 +58,51 @@ type MutationDeleteConversationSuccess {
   data: Boolean!
 }
 
-union MutationDeleteFileUploadResult = Error | MutationDeleteFileUploadSuccess
+union MutationRenameConversationResult = Error | MutationRenameConversationSuccess
 
-type MutationDeleteFileUploadSuccess {
+type MutationRenameConversationSuccess {
   data: Boolean!
 }
 
-union MutationMagicLinkResult = Error | MutationMagicLinkSuccess
+union MutationSaveSettingsResult = Error | MutationSaveSettingsSuccess
 
-type MutationMagicLinkSuccess {
-  data: Boolean!
-}
-
-union MutationUploadFileResult = Error | MutationUploadFileSuccess
-
-type MutationUploadFileSuccess {
-  data: FileUpload!
+type MutationSaveSettingsSuccess {
+  data: Settings!
 }
 
 type Query {
   conversation(conversationId: Int!): Conversation
-  conversations: [Conversation!]
-  currentUser: user
-  files: [FileUpload!]
+  conversations: [Conversation!]!
+  """Resolves locally; kept so the frontend's user context keeps working."""
+  currentUser: user!
+  """Liveness check for the in-process API server."""
+  health: String!
+  settings: Settings!
+}
+
+type Settings {
+  apiKey: String!
+  baseUrl: String!
+  model: String!
+}
+
+input SettingsInput {
+  apiKey: String!
+  baseUrl: String!
+  model: String!
 }
 
 type Subscription {
-  conversation(conversationId: Int, message: String!): SubscriptionConversationResult
+  """
+  Starts (or continues) a chat turn. `conversationId` omitted creates a
+  conversation; the new user message and an empty assistant message are
+  persisted up front, then provider chunks stream over this subscription.
+  
+  Kill switch: dropping the subscription (stop button / disconnect)
+  drops the receiver below; the pump task notices the failed send,
+  aborts the provider request, and persists the partial reply.
+  """
+  conversation(conversationId: Int, message: String!): SubscriptionConversationResult!
 }
 
 union SubscriptionConversationResult = Error | SubscriptionConversationSuccess
@@ -117,8 +111,7 @@ type SubscriptionConversationSuccess {
   data: ConversationMessageChunk!
 }
 
-scalar Upload
-
+"""The single local user; no auth machinery exists in the desktop app."""
 type user {
   email: String!
   firstName: String

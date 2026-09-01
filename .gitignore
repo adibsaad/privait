@@ -19,3 +19,10 @@ Procfile
 # Rust / Tauri
 src-tauri/target/
 src-tauri/gen/
+# TypeScript incremental build / tsc -b emit artifacts
+*.tsbuildinfo
+src/frontend/vite.config.d.mts
+src/frontend/vite.config.mjs
+src/frontend/src/**/*.js
+src/server/**/*.js
+/codegen.js

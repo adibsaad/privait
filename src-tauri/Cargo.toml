@@ -31,6 +31,13 @@ apalis-sqlite = { version = "=1.0.0-rc.8" }
 apalis-codec = { version = "=0.1.0-rc.9" }
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio"] }
 futures-util = "0.3"
+tokio-stream = "0.1"
+async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+bytes = "1"
+tiktoken-rs = "0.6"
+fancy-regex = "0.14"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

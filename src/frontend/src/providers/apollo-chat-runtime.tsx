@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 import { gql } from '@apollo/client'
 import {
@@ -10,17 +11,28 @@ import {
   ThreadMessageLike,
   AssistantRuntimeProvider,
   useExternalStoreRuntime,
-  ExternalStoreThreadData,
   ExternalStoreThreadListAdapter,
 } from '@assistant-ui/react'
+import { toast } from 'sonner'
 
 import { EMPTY_THREAD_ID } from '@frontend/config/consts'
 import { useThreadContext } from '@frontend/context/thread'
 import {
+  ArchiveConversationDocument,
   ConversationSubDocument,
   DeleteConversationDocument,
   GetConversationDocument,
+  RenameConversationDocument,
 } from '@frontend/graphql/output/graphql'
+import {
+  appendAssistantChunk,
+  dropNewThreadBucket,
+  reconcileFirstChunk,
+  reconcileThreadList,
+  userMessage,
+  withOptimisticThread,
+  withOptimisticUserMessage,
+} from '@frontend/providers/chat-threads'
 
 gql(/* GraphQL */ `
   subscription ConversationSub($conversationId: Int, $message: String!) {
@@ -53,6 +65,30 @@ gql(/* GraphQL */ `
   mutation DeleteConversation($conversationId: Int!) {
     deleteConversation(conversationId: $conversationId) {
       __typename
+
+      ... on Error {
+        message
+      }
+    }
+  }
+
+  mutation RenameConversation($conversationId: Int!, $title: String!) {
+    renameConversation(conversationId: $conversationId, title: $title) {
+      __typename
+
+      ... on Error {
+        message
+      }
+    }
+  }
+
+  mutation ArchiveConversation($conversationId: Int!, $archived: Boolean!) {
+    archiveConversation(conversationId: $conversationId, archived: $archived) {
+      __typename
+
+      ... on Error {
+        message
+      }
     }
   }
 `)
@@ -63,6 +99,9 @@ export function ApolloChatRuntimeProvider({
   children: React.ReactNode
 }) {
   const gotFirstChunkRef = useRef(false)
+  // Selecting a thread (from the sidebar, on any route) must land the user
+  // on the chat page.
+  const navigate = useNavigate()
   const [nextMessage, nextMessageSet] = useState<{
     msg: string
     conversationId: number | null
@@ -70,6 +109,8 @@ export function ApolloChatRuntimeProvider({
   const [skipSub, skipSubSet] = useState(true)
   const [isRunning, isRunningSet] = useState(false)
   const [deleteConversationMut] = useMutation(DeleteConversationDocument)
+  const [renameConversationMut] = useMutation(RenameConversationDocument)
+  const [archiveConversationMut] = useMutation(ArchiveConversationDocument)
   const [loadConversation] = useLazyQuery(GetConversationDocument)
 
   // threads
@@ -78,12 +119,11 @@ export function ApolloChatRuntimeProvider({
     setCurrentThreadId,
     threadList,
     setThreadList,
+    archivedThreadList,
+    setArchivedThreadList,
     threads,
     setThreads,
   } = useThreadContext()
-  const [archivedThreadList, archivedThreadListSet] = useState<
-    ExternalStoreThreadData<'archived'>[]
-  >([])
   const threadListAdapter: ExternalStoreThreadListAdapter = {
     threadId: currentThreadId,
     threads: threadList,
@@ -91,17 +131,27 @@ export function ApolloChatRuntimeProvider({
 
     // todo: don't create a new thread each time, just go to the existing new one
     onSwitchToNewThread: () => {
+      // Drop any optimistic messages left in the "new thread" bucket.
+      setThreads(prev => dropNewThreadBucket(prev))
       setCurrentThreadId(EMPTY_THREAD_ID)
+      navigate('/chat')
     },
 
     onSwitchToThread: threadId => {
       setCurrentThreadId(threadId)
+      navigate('/chat')
     },
 
     onRename: (threadId, newTitle) => {
       setThreadList(prev =>
         prev.map(t => (t.id === threadId ? { ...t, title: newTitle } : t)),
       )
+
+      if (Number(threadId)) {
+        renameConversationMut({
+          variables: { conversationId: Number(threadId), title: newTitle },
+        })
+      }
     },
 
     onArchive: threadId => {
@@ -111,10 +161,35 @@ export function ApolloChatRuntimeProvider({
       }
 
       setThreadList(prev => prev.filter(t => t.id !== threadId))
-      archivedThreadListSet(prev => [
+      setArchivedThreadList(prev => [
         { ...thread, status: 'archived' },
         ...prev,
       ])
+
+      if (Number(threadId)) {
+        archiveConversationMut({
+          variables: { conversationId: Number(threadId), archived: true },
+        })
+      }
+    },
+
+    onUnarchive: threadId => {
+      const thread = archivedThreadList.find(t => t.id === threadId)
+      if (!thread) {
+        return
+      }
+
+      setArchivedThreadList(prev => prev.filter(t => t.id !== threadId))
+      setThreadList(prev => [
+        { id: thread.id, status: 'regular', title: thread.title },
+        ...prev,
+      ])
+
+      if (Number(threadId)) {
+        archiveConversationMut({
+          variables: { conversationId: Number(threadId), archived: false },
+        })
+      }
     },
 
     onDelete: threadId => {
@@ -153,6 +228,14 @@ export function ApolloChatRuntimeProvider({
     },
     onData: newMessage => {
       if (newMessage.data.data?.conversation?.__typename === 'Error') {
+        // Provider failures arrive as union error payloads; surface them and
+        // release the composer (the stream ends after the error arm).
+        const message =
+          newMessage.data.data?.conversation?.message ?? 'Chat failed'
+        toast.error(message)
+        skipSubSet(true)
+        isRunningSet(false)
+        gotFirstChunkRef.current = false
         return
       }
 
@@ -175,41 +258,15 @@ export function ApolloChatRuntimeProvider({
         if (!gotFirstChunkRef.current) {
           gotFirstChunkRef.current = true
 
-          const userMessage: ThreadMessageLike = {
-            role: 'user',
-            content: nextMessage.msg,
-            id: previousMessageId,
-            // attachments: {
-            // }
-          }
+          setThreads(prev =>
+            reconcileFirstChunk(
+              prev,
+              threadId,
+              userMessage(previousMessageId, nextMessage.msg),
+            ),
+          )
 
-          setThreads(prev => {
-            // Only add the user message if it's not already there
-            if (prev.get(threadId)?.find(m => m.id === previousMessageId)) {
-              return prev
-            }
-
-            return new Map(prev).set(threadId, [
-              ...(prev.get(threadId) || []).filter(m => m.id !== 'temp'),
-              userMessage,
-            ])
-          })
-
-          setThreadList(prev => {
-            // Only add the thread to the list if it's not there already
-            if (prev.find(t => t.id === threadId)) {
-              return prev
-            }
-
-            return [
-              {
-                id: threadId,
-                status: 'regular',
-                title: '', // will be updated later
-              },
-              ...prev,
-            ]
-          })
+          setThreadList(prev => reconcileThreadList(prev, threadId))
 
           loadConversation({
             variables: {
@@ -234,45 +291,9 @@ export function ApolloChatRuntimeProvider({
           })
         }
 
-        setThreads(prev => {
-          if (!prev.get(threadId)?.length) {
-            return prev
-          }
-
-          if (prev.get(threadId)?.find(m => m.id === messageId)) {
-            return new Map(prev).set(
-              threadId,
-              (prev.get(threadId) || []).map(m =>
-                m.id === messageId
-                  ? {
-                      ...m,
-                      id: messageId,
-                      content: [
-                        {
-                          type: 'text',
-                          text: (m.content[0] as any).text + chunk,
-                        },
-                      ],
-                    }
-                  : m,
-              ),
-            )
-          } else {
-            return new Map(prev).set(threadId, [
-              ...(prev.get(threadId) || []),
-              {
-                id: messageId,
-                role: 'assistant',
-                content: [
-                  {
-                    type: 'text',
-                    text: chunk,
-                  },
-                ],
-              },
-            ])
-          }
-        })
+        setThreads(prev =>
+          appendAssistantChunk(prev, threadId, messageId, chunk),
+        )
 
         setCurrentThreadId(threadId)
       }
@@ -284,6 +305,17 @@ export function ApolloChatRuntimeProvider({
     const content = message.content[0]
     if (content && typeof content !== 'string') {
       if (content.type === 'text') {
+        // Optimistically show the user's message right away; the persisted
+        // id arrives with the first streamed chunk and replaces it.
+        setThreads(prev =>
+          withOptimisticUserMessage(prev, currentThreadId, content.text),
+        )
+        // Brand-new chats also appear in the sidebar immediately, selected
+        // with a fallback title, and get their real id on the first chunk.
+        if (currentThreadId === EMPTY_THREAD_ID) {
+          setThreadList(prev => withOptimisticThread(prev))
+        }
+
         nextMessageSet({
           msg: content.text,
           conversationId: Number(currentThreadId),
@@ -295,11 +327,19 @@ export function ApolloChatRuntimeProvider({
     }
   }
 
-  // todo: add kill signal
+  // Stop button: unsubscribe; the backend drops the stream on `complete`
+  // and aborts the provider request, keeping the partial reply.
+  const onCancel = async () => {
+    skipSubSet(true)
+    isRunningSet(false)
+    gotFirstChunkRef.current = false
+  }
+
   const runtime = useExternalStoreRuntime({
     convertMessage: m => m,
     messages: threads.get(currentThreadId) || [],
     onNew,
+    onCancel,
     isRunning,
     setMessages: messages => {
       setThreads(prev =>

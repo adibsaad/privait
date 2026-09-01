@@ -94,10 +94,12 @@ const MIGRATIONS: &[&str] = &[
         +content TEXT,
         +file_id INTEGER
     );
-    CREATE VIRTUAL TABLE memories USING vec0(
+CREATE VIRTUAL TABLE memories USING vec0(
         embedding float[384] distance_metric=cosine,
         +content TEXT
     );",
+    // v2 — thread archive state (rename/archive are persisted from M2 on)
+    "ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;",
 ];
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {

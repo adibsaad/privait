@@ -1,14 +1,26 @@
 import { Outlet } from 'react-router-dom'
 
-import { Nav } from '../components/nav'
+import { AppSidebar } from '../components/app-sidebar'
+import {
+  SidebarInset,
+  SidebarProvider,
+  SidebarTrigger,
+} from '../components/ui/sidebar'
+import { ApolloChatRuntimeProvider } from '../providers/apollo-chat-runtime'
+import { ThreadProvider } from '../providers/thread'
 
 export function Root() {
   return (
-    <div className="text-dark dark:text-white">
-      <Nav />
-      <section className="p-8">
-        <Outlet />
-      </section>
-    </div>
+    <ThreadProvider>
+      <ApolloChatRuntimeProvider>
+        <SidebarProvider>
+          <AppSidebar />
+          <SidebarInset>
+            <SidebarTrigger className="absolute left-2 top-2 z-10 md:hidden" />
+            <Outlet />
+          </SidebarInset>
+        </SidebarProvider>
+      </ApolloChatRuntimeProvider>
+    </ThreadProvider>
   )
 }

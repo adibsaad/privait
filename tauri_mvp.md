@@ -105,11 +105,12 @@ Errors: keep the `Error { message }` / `XSuccess` union pattern.
 - [x] Frontend: repoint Apollo (httpLink uri, `GraphQLWsLink`, upload link), delete login/magic-link pages, `AuthRoute`, jwt hook
 - [x] Streaming smoke test: trivial subscription round-trips to the webview
 
-### M2 — Chat parity
-- [ ] Port `ChatProvider` trait + `OpenAiCompatProvider` (streaming SSE → broadcast channel)
-- [ ] Resolvers: `conversations`, `conversation`, `deleteConversation`, `conversation` subscription (create conversation, persist USER + ASSISTANT messages, stream chunks, finalize)
-- [ ] Frontend: verify `apollo-chat-runtime.tsx` works with minimal diffs; persist rename/archive; stop-generation (kill switch on backend)
-- [ ] Port chunker + streaming unit tests from `src/server/llm/chunker.test.ts`
+### M2 — Chat parity ✅
+- [x] Port `ChatProvider` trait + `OpenAiCompatProvider` (streaming SSE → per-subscription mpsc; subscriber drop = backend kill switch)
+- [x] Resolvers: `conversations`, `conversation`, `deleteConversation`, `conversation` subscription (create conversation, persist USER + ASSISTANT messages, stream chunks, finalize)
+- [x] Frontend: verify `apollo-chat-runtime.tsx` works with minimal diffs; persist rename/archive; stop-generation (kill switch on backend)
+- [x] Port chunker + streaming unit tests from `src/server/llm/chunker.test.ts`
+- [x] Settings UI pulled forward from M4: `settings` query + `saveSettings` mutation + dialog in Nav (base URL / API key / model, blank defaults — chat errors until configured)
 
 ### M3 — Files + RAG parity
 - [ ] `uploadFile`/`files`/`deleteFileUpload` → OpenDAL fs operator + `files` table, same validation (5MB, MIME allowlist)
@@ -119,7 +120,7 @@ Errors: keep the `Error { message }` / `XSuccess` union pattern.
 
 ### M4 — Ship the shell
 - [ ] Schema parity check: introspected async-graphql schema diffs clean against old `schema.graphql` (minus auth)
-- [ ] Settings UI (provider base URL / API key / model) + provider smoke-tested against OpenRouter and a local ollama
+- [ ] Settings UI (provider base URL / API key / model) — shipped in M2; provider smoke-tested against OpenRouter and a local ollama still pending here
 - [ ] `tauri build` → dmg (macOS first), app icon, AGPL notices
 - [ ] Delete `src/server/`, docker/, Procfile, ElasticMQ/Mailpit/RustFS refs; update README + CI
 - [ ] Manual smoke checklist passes: cold start < 2s, chat streams, file processes end-to-end, no network except provider calls
@@ -128,7 +129,7 @@ Errors: keep the `Error { message }` / `XSuccess` union pattern.
 
 - **Rust:** unit tests (chunker params, embedding store, `push_job`/handler dispatch), integration tests for resolvers against in-memory SQLite.
 - **Objective parity gate:** generated-schema diff (M4) + side-by-side manual run of old web app vs Tauri app performing the same chat/file flows.
-- **Frontend:** existing vitest suite keeps passing; add a runtime test for the swapped link chain.
+- **Frontend:** `tsc -b` + vite build + eslint + vitest run all green (vite build alone doesn't typecheck — a missing import once crashed the homepage at render).
 - **Privacy check:** no outbound requests except configured provider base URL (verify via logs + Little Snitch/manual).
 
 ## Risks / open questions

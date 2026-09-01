@@ -39,9 +39,102 @@ Source of truth: `tauri_mvp.md`. This file tracks the current milestone's workin
 - Smoke test passed: app window opened, vite 200, API server 401 without token on free port. Known issue: stale `src/frontend/node_modules/.vite` cache referenced apollo v3 after upgrade — cleared; `rm -rf src/frontend/node_modules/.vite` if deps ever resolve wrong again.
 - Left as-is per user: frontend `pnpm test` run (vitest watch mode; not part of M0 verification).
 
+## M2 — Chat parity (+ Settings UI pulled forward from M4) ✅
+
+User decision: settings storage = the M1 `settings(key, value)` SQLite table (already live in `privait.db`); keychain only before RC.
+
+### Backend (src-tauri) ✅
+
+- [x] `db.rs`: migration v2 — `conversations.archived INTEGER NOT NULL DEFAULT 0`
+- [x] `chunker.rs`: port of `chunker.ts` (sentence regex via fancy-regex, cl100k_base via tiktoken-rs) + all 5 ported tests pass + span/word-fallback/limits tests
+- [x] `provider.rs`: `ChatProvider` trait (async-trait) + `OpenAiCompatProvider` — reqwest, hand-rolled SSE decoder, blank-defaults (`from_settings` returns None until configured)
+- [x] `schema.rs`: Conversation/Message/Settings objects, all four mutations with Error unions, streaming `conversation` subscription (mpsc pump, kill switch, error arms)
+- [x] `schema.snapshot.graphql` refreshed + reviewed (named `Conversation`/`Message` to match old SDL)
+- [x] Tests: 46 total — subscription round-trip vs a mock OpenAI SSE endpoint, missing-conversation/not-configured/provider-error arms, kill-switch persists partial, mutations, settings validation, WS transport round-trip through the real resolver
+
+### Frontend (src/frontend) ✅
+
+- [x] `codegen.ts`: schema → `src-tauri/schema.snapshot.graphql`; codegen green
+- [x] `apollo-chat-runtime.tsx`: `onCancel` stop-generation, `Error` payloads → toast + spinner reset, rename/archive/unarchive/delete persisted, archived threads loaded server-side via ThreadContext
+- [x] Settings UI: `settings-dialog.tsx` (gear in Nav) → GetSettings/SaveSettings; Files page → placeholder until M3 (old page in git history; its generated types no longer exist in the live schema)
+- [x] Verify: vite build green, eslint clean, `vitest run` 5/5, cargo fmt/clippy/test green
+
+### Notes
+
+- Schema additions (settings, rename/archive, `archived`) are intentional deviations from the frozen old schema — M4 parity gate becomes "diff clean minus auth minus these additions".
+- Stop-generation design: frontend unsubscribes → async-graphql drops the stream → mpsc send fails → task persists accumulated chunks and aborts the provider request. No new schema surface needed.
+
+### Live chat verification (user provider: Featherless / GLM-5.3-Flash)
+
+- [x] `cargo run --example chat_smoke` — real app DB: settings → subscription → provider SSE → persisted USER/ASSISTANT rows all green ("pong", 2 chunks, 3.3s). Harness kept at `src-tauri/examples/chat_smoke.rs` for repeatable smoke tests.
+
+### Review (M2)
+
+- **Kill-switch mechanics**: no new schema surface — the stop button unsubscribes (graphql-ws `complete`), async-graphql drops the subscription stream, the pump task sees the failed mpsc send, aborts the provider request, and persists what streamed *before* the drop (accumulate-after-send keeps the aborted chunk out). Same path covers tab/app close.
+- **Streaming uses a dedicated mpsc per subscription**, not a broadcast channel as sketched in the plan — one subscriber per turn, so point-to-point is simpler and drop detection comes free.
+- **Subscription errors ride the union** (`Error` arm as a stream item), matching the old Pothos behavior the frontend checks for; the runtime now toasts them and releases the composer (old code left the spinner stuck).
+- **Check order in the subscription**: conversation existence → provider config → messages; provider-unconfigured errors only surface once the conversation resolves (keeps "Conversation not found" diagnosable).
+- **Schema naming**: Rust-internal `GqlConversation`/`GqlMessage` are SDL-named `Conversation`/`Message`; `#[Object(name = ...)]` renames (not `#[graphql]` on the struct) for `#[Object]`-based types.
+- **Chunker port is byte-faithful**: JS quirks preserved (segments keep leading whitespace; multi-segment chunks are whitespace-normalized joins so span slices only match after normalization; whole-text-smaller-than-overlap re-emits the tail). All 5 JS tests pass with identical expectations.
+- **tiktoken-rs 0.6** has no feature flags (BPEs always bundled) — plain dep, `encode_ordinary` == JS `encode`.
+- **Files page**: replaced with a placeholder — its generated file-upload types don't exist in the live schema until M3, and the M2 backend can't serve uploads anyway. Old page in git history.
+- **SettingsDialog mounts only when opened** (avoids `useQuery` under provider-less test trees; also skips query setup entirely while closed).
+- **Default config is blank** (user decision): chat errors with "not configured — set it up in Settings" until saved; the dialog placeholders hint at ollama.
+
+### UI fixes (user-reported: broken colors + homepage crash)
+
+- [x] Homepage crash: `RenameConversationDocument`/`ArchiveConversationDocument` were used but never imported — vite build doesn't typecheck, so it shipped. Imports added.
+- [x] Colors: index.html body had `bg-white dark:bg-neutral-500` (mid-gray wash); index.css was missing the entire shadcn token palette; tailwind.config.js had no token mappings for the classes assistant-ui uses (`bg-muted`, `text-muted-foreground`, `border-border`, ...). Restored the standard shadcn "neutral" CSS-variable palette + tailwind color map + `body { @apply bg-background text-foreground }`; `root.tsx` invalid `text-dark` class replaced.
+- [x] Fixed pre-existing tsc errors (Apollo v4 generics, vitest 3 `vi.fn` signature, unused import) — `pnpm exec tsc -b` is now green and part of the verification flow.
+- [x] Verified in a browser against vite: dark + light modes render correctly, no crash, chat + settings dialog render.
+
+### Sidebar redesign (modeled on Claude desktop)
+
+- [x] Single full-height left sidebar (`app-sidebar.tsx`, shadcn Sidebar): logo top, Chat/Files nav, thread list always visible regardless of route, theme toggle + Settings pinned bottom, avatar dropped
+- [x] Nav header (`nav.tsx`) and chat-embedded `threadlist-sidebar.tsx` deleted; ThreadProvider + ApolloChatRuntimeProvider hoisted to Root so the thread list survives navigation; `assistant.tsx` collapsed into direct `<Thread />`
+- [x] App shell made a definite-height layout: sidebar wrapper `h-svh overflow-hidden` (the vendored shadcn version's `min-h-svh` + `h-full` combo collapsed the sidebar to content height); mobile keeps the built-in Sheet + SidebarTrigger
+- [x] Error page simplified (no header dependency); theme toggle verified functional (Light/Dark/System persist via localStorage)
+- [x] Verified in browser: sidebar 256×800, Files route keeps sidebar + thread list, active nav state, settings dialog, theme switch
+
+### Follow-up fixes (user-reported)
+
+- [x] New conversations title themselves from the first prompt (whitespace collapsed, word-boundary truncate at 50 chars + ellipsis, empty prompt keeps "Untitled chat" fallback) — a summarizer model takes over later; 4 Rust unit tests + assertion in the streaming test
+- [x] Sidebar thread selection now navigates: `onSwitchToThread`/`onSwitchToNewThread` call `navigate('/chat')` (was a no-op when already on /files); verified in browser from /files
+
+### Sidebar chat highlight (user-reported: no visible selection)
+
+- [x] Root cause: `data-active:bg-neutral-100` is Tailwind *v4* bare-data syntax; the repo's v3.4 silently ignores it, so the highlight never generated. Converted to `data-[active=true]:` across thread-list.tsx (item, "New Thread" button, More-options reveal).
+- [x] New `serve_dev` example (`cargo run --example serve_dev`): token-free API on :3000 from the real app DB so plain-web UI work is testable in a browser; extracted `router_without_auth`/`serve_router` in server.rs (prod path unchanged, token gate intact).
+- [x] CORS: origin allowlist → loopback predicate (Vite can drift to other ports; CORS is browser-only mitigation, the bearer token gates other local callers).
+- [x] Verified in browser against live data: active thread bg neutral-800 in dark (transparent on inactive), highlight follows clicks, thread messages load.
+
+### Fix: empty sidebar after the CORS refactor (user-reported)
+
+- [x] Root cause: the router refactor put the bearer-token middleware OUTSIDE the CORS layer; browser preflight OPTIONS carries no Authorization header → 401 → allConversations failed → sidebar loaded empty (chats all intact in the DB; purely a transport bug). My `serve_dev` browser check missed it because that example has no auth layer.
+- [x] Restored layer order: auth INSIDE CORS (route → auth → cors → body limit) in `build_router`; `cors_layer()`/`body_limit()` factored out.
+- [x] Tests (3): `cors_preflight_is_answered_without_credentials` (preflight → 200 + allow-origin on the token-gated router; wrong-token POST still 401s), `cors_allows_tauri_and_any_loopback_browser_origin`, `cors_rejects_non_utf8_origins`. 53 Rust tests green, clippy clean.
+
+### Sidebar follow-ups (user-reported)
+
+- [x] New-chat flow is now fully optimistic: sending the first message immediately shows + selects a pending "New Chat" sidebar entry (withOptimisticThread / reconcileThreadList) while the optimistic message + loading state render in the thread; first chunk swaps in the real id and title. (+5 chat-threads tests → 23 frontend)
+- [x] Streaming hardened: a provider that stalls anywhere before the first chunk (connection, headers, or tokens) now fails loudly after a 30s budget ("Provider did not respond within 30s") instead of an endless spinner — budget injectable via build_schema_with_timeout for tests.
+- [x] "Missing" chats explained: they were ARCHIVED via the ··· menu and the sidebar had no archived section — invisible and unrecoverable. Thread list now renders an Archived section (fallback-titled, muted) with Unarchive + Delete; unarchive persists via archiveConversation(archived:false). Verified in browser against the live DB.
+
+### Settings window revamp (user follow-up)
+
+- [x] Archived chats hidden from the main sidebar again (archived section removed from thread-list.tsx).
+- [x] Settings dialog redesigned: internal left-rail navigation with two sections — `Provider` (existing base URL / API key / model + Save) and `Archived chats` (titles only, Unarchive per row, empty state). Unarchive uses the archiveConversation mutation and shares the normalized Apollo cache with the main thread list, so the sidebar updates instantly; toast on success.
+- [x] Cleaned 72 stray `tsc -b` transpile artifacts (*.js) polluting src/ + eslint; artifacts gitignored.
+- [x] Verified in browser against the live DB: main sidebar hides archived, settings lists them by title, unarchive moves them back instantly.
+
+### Message action rows (user follow-up)
+
+- [x] Assistant message: hover row keeps Copy only (Refresh + More/export removed); footer is a reserved min-h-6 slot with hover/focus-revealed buttons — hovering no longer shifts content below (measured 0px shift, live).
+- [x] User message: dead Edit pencil removed (and dead EditComposer); Copy sits below the bubble, right-aligned, in a reserved min-h-7 row — same no-shift pattern.
+
 ## Next
 
-M2 — Chat parity (SQLite + sqlite-vec, apalis `jobs.db`, schema skeleton, Apollo repoint, WS subscription smoke test).
+M3 — Files + RAG parity (restore the real Files page from git history when its schema lands).
 
 ## CI note (M1 wrap-up)
 

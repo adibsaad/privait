@@ -10,11 +10,19 @@ export type Thread = {
   status: 'regular'
 }
 
+export type ArchivedThread = {
+  id: string
+  title: string
+  status: 'archived'
+}
+
 export const ThreadContext = createContext<{
   currentThreadId: string
   setCurrentThreadId: (id: string) => void
   threadList: Thread[]
   setThreadList: React.Dispatch<React.SetStateAction<Thread[]>>
+  archivedThreadList: ArchivedThread[]
+  setArchivedThreadList: React.Dispatch<React.SetStateAction<ArchivedThread[]>>
   threads: Map<string, ThreadMessageLike[]>
   setThreads: React.Dispatch<
     React.SetStateAction<Map<string, ThreadMessageLike[]>>
@@ -24,6 +32,8 @@ export const ThreadContext = createContext<{
   setCurrentThreadId: () => {},
   threadList: [],
   setThreadList: () => {},
+  archivedThreadList: [],
+  setArchivedThreadList: () => {},
   threads: new Map(),
   setThreads: () => {},
 })

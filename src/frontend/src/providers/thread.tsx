@@ -6,7 +6,7 @@ import { ThreadMessageLike } from '@assistant-ui/react'
 import { Loader } from 'lucide-react'
 
 import { EMPTY_THREAD_ID } from '@frontend/config/consts'
-import { Thread, ThreadContext } from '@frontend/context/thread'
+import { ArchivedThread, Thread, ThreadContext } from '@frontend/context/thread'
 import {
   AllConversationsDocument,
   MessageRole,
@@ -18,6 +18,7 @@ gql(/* GraphQL */ `
       __typename
       id
       title
+      archived
       messages {
         __typename
         id
@@ -49,6 +50,9 @@ const graphqlRoleToAuiRole: Record<MessageRole, ThreadMessageLike['role']> = {
 export function ThreadProvider({ children }: { children: ReactNode }) {
   // Maps threadId -> messages
   const [threadList, setThreadList] = useState<Thread[]>([])
+  const [archivedThreadList, setArchivedThreadList] = useState<
+    ArchivedThread[]
+  >([])
   const [threads, setThreads] = useState<Map<string, ThreadMessageLike[]>>(
     new Map(),
   )
@@ -74,11 +78,22 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
 
     setThreads(tmpThreads)
     setThreadList(
-      data.conversations.map(c => ({
-        id: c.id,
-        status: 'regular',
-        title: c.title,
-      })),
+      data.conversations
+        .filter(c => !c.archived)
+        .map(c => ({
+          id: c.id,
+          status: 'regular' as const,
+          title: c.title,
+        })),
+    )
+    setArchivedThreadList(
+      data.conversations
+        .filter(c => c.archived)
+        .map(c => ({
+          id: c.id,
+          status: 'archived' as const,
+          title: c.title,
+        })),
     )
     setCurrentThreadId(data.conversations[0].id)
   }, [loading, data])
@@ -94,6 +109,8 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
         setCurrentThreadId,
         threadList,
         setThreadList,
+        archivedThreadList,
+        setArchivedThreadList,
         threads,
         setThreads,
       }}
