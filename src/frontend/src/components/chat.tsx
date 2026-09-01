@@ -1,5 +1,5 @@
-import { Assistant } from './assistant'
+import { Thread } from './assistant-ui/thread'
 
 export const Chat = () => {
-  return <Assistant />
+  return <Thread />
 }

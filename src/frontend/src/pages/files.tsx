@@ -5,7 +5,7 @@ import { FileStack } from 'lucide-react'
 // returns here once `uploadFile`/`process-file` exist server-side.
 export function Files() {
   return (
-    <div className="text-muted-foreground flex h-full flex-col items-center justify-center gap-2">
+    <div className="text-muted-foreground flex h-svh flex-col items-center justify-center gap-2">
       <FileStack className="size-10" />
       <p>File uploads arrive with the RAG milestone.</p>
     </div>
