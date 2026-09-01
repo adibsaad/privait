@@ -23,6 +23,6 @@ src-tauri/gen/
 *.tsbuildinfo
 src/frontend/vite.config.d.mts
 src/frontend/vite.config.mjs
-src/frontend/**/*.js
+src/frontend/src/**/*.js
 src/server/**/*.js
 /codegen.js
