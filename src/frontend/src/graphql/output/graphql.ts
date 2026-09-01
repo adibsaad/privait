@@ -87,6 +87,11 @@ export type FileUploadInput = {
 export type Message = {
   __typename?: 'Message'
   content: Scalars['String']['output']
+  /**
+   * Attachments carried by this message — lets chat history re-render
+   * the file chips after a reload.
+   */
+  files: Array<FileUpload>
   id: Scalars['ID']['output']
   role: MessageRole
 }
@@ -107,8 +112,11 @@ export type Mutation = {
   saveSettings: MutationSaveSettingsResult
   /**
    * Persists a validated upload (5MB cap, MIME allowlist) to storage and
-   * the `files` table, then enqueues the process-file job. The row is
-   * returned with status UPLOADED; the worker flips it to PROCESSED.
+   * the `files` table, then runs the extract → chunk → embed pipeline
+   * inline and returns the PROCESSED row. Upload happens on send, so the
+   * user is waiting on the result — background processing (the apalis
+   * worker) is no longer in this path. On pipeline failure the upload is
+   * rolled back so nothing lingers unprocessed.
    */
   uploadFile: MutationUploadFileResult
 }
@@ -226,6 +234,12 @@ export type Subscription = {
    * conversation; the new user message and an empty assistant message are
    * persisted up front, then provider chunks stream over this subscription.
    *
+   * `fileIds` are uploads sent with this turn (the composer uploads them
+   * right before subscribing). They are attached to the user message here;
+   * file chunks from this conversation ground the turn. `message` may be
+   * empty when files are attached — the model then receives a synthesized
+   * instruction while the bubble keeps just the chips.
+   *
    * Kill switch: dropping the subscription (stop button / disconnect)
    * drops the receiver below; the pump task notices the failed send,
    * aborts the provider request, and persists the partial reply.
@@ -235,6 +249,7 @@ export type Subscription = {
 
 export type SubscriptionConversationArgs = {
   conversationId?: InputMaybe<Scalars['Int']['input']>
+  fileIds?: InputMaybe<Array<Scalars['Int']['input']>>
   message: Scalars['String']['input']
 }
 
@@ -304,47 +319,10 @@ export type CurrentUserQuery = {
   }
 }
 
-export type UploadFileMutationVariables = Exact<{
-  file: Scalars['Upload']['input']
-}>
-
-export type UploadFileMutation = {
-  __typename?: 'Mutation'
-  uploadFile:
-    | { __typename?: 'Error'; message: string }
-    | {
-        __typename?: 'MutationUploadFileSuccess'
-        data: { __typename?: 'FileUpload'; id: string }
-      }
-}
-
-export type AllFilesQueryVariables = Exact<{ [key: string]: never }>
-
-export type AllFilesQuery = {
-  __typename?: 'Query'
-  files: Array<{
-    __typename?: 'FileUpload'
-    id: string
-    originalName: string
-    createdAt: string
-    status: FileStatus
-  }>
-}
-
-export type DeleteFileMutationVariables = Exact<{
-  fileId: Scalars['Int']['input']
-}>
-
-export type DeleteFileMutation = {
-  __typename?: 'Mutation'
-  deleteFileUpload:
-    | { __typename: 'Error'; message: string }
-    | { __typename: 'MutationDeleteFileUploadSuccess'; data: boolean }
-}
-
 export type ConversationSubSubscriptionVariables = Exact<{
   conversationId?: InputMaybe<Scalars['Int']['input']>
   message: Scalars['String']['input']
+  fileIds?: InputMaybe<Array<Scalars['Int']['input']> | Scalars['Int']['input']>
 }>
 
 export type ConversationSubSubscription = {
@@ -360,6 +338,25 @@ export type ConversationSubSubscription = {
           messageId: string
           messageChunk: string
           done?: boolean | null
+        }
+      }
+}
+
+export type UploadFileMutationVariables = Exact<{
+  file: Scalars['Upload']['input']
+}>
+
+export type UploadFileMutation = {
+  __typename?: 'Mutation'
+  uploadFile:
+    | { __typename: 'Error'; message: string }
+    | {
+        __typename: 'MutationUploadFileSuccess'
+        data: {
+          __typename?: 'FileUpload'
+          id: string
+          originalName: string
+          status: FileStatus
         }
       }
 }
@@ -426,6 +423,11 @@ export type AllConversationsQuery = {
       id: string
       content: string
       role: MessageRole
+      files: Array<{
+        __typename?: 'FileUpload'
+        id: string
+        originalName: string
+      }>
     }>
   }>
 }
@@ -445,6 +447,11 @@ export type GetConversationWithMessagesQuery = {
       id: string
       content: string
       role: MessageRole
+      files: Array<{
+        __typename?: 'FileUpload'
+        id: string
+        originalName: string
+      }>
     }>
   } | null
 }
@@ -625,214 +632,6 @@ export const CurrentUserDocument = {
     },
   ],
 } as unknown as DocumentNode<CurrentUserQuery, CurrentUserQueryVariables>
-export const UploadFileDocument = {
-  kind: 'Document',
-  definitions: [
-    {
-      kind: 'OperationDefinition',
-      operation: 'mutation',
-      name: { kind: 'Name', value: 'uploadFile' },
-      variableDefinitions: [
-        {
-          kind: 'VariableDefinition',
-          variable: { kind: 'Variable', name: { kind: 'Name', value: 'file' } },
-          type: {
-            kind: 'NonNullType',
-            type: {
-              kind: 'NamedType',
-              name: { kind: 'Name', value: 'Upload' },
-            },
-          },
-        },
-      ],
-      selectionSet: {
-        kind: 'SelectionSet',
-        selections: [
-          {
-            kind: 'Field',
-            name: { kind: 'Name', value: 'uploadFile' },
-            arguments: [
-              {
-                kind: 'Argument',
-                name: { kind: 'Name', value: 'input' },
-                value: {
-                  kind: 'ObjectValue',
-                  fields: [
-                    {
-                      kind: 'ObjectField',
-                      name: { kind: 'Name', value: 'file' },
-                      value: {
-                        kind: 'Variable',
-                        name: { kind: 'Name', value: 'file' },
-                      },
-                    },
-                  ],
-                },
-              },
-            ],
-            selectionSet: {
-              kind: 'SelectionSet',
-              selections: [
-                {
-                  kind: 'InlineFragment',
-                  typeCondition: {
-                    kind: 'NamedType',
-                    name: { kind: 'Name', value: 'Error' },
-                  },
-                  selectionSet: {
-                    kind: 'SelectionSet',
-                    selections: [
-                      {
-                        kind: 'Field',
-                        name: { kind: 'Name', value: 'message' },
-                      },
-                    ],
-                  },
-                },
-                {
-                  kind: 'InlineFragment',
-                  typeCondition: {
-                    kind: 'NamedType',
-                    name: { kind: 'Name', value: 'MutationUploadFileSuccess' },
-                  },
-                  selectionSet: {
-                    kind: 'SelectionSet',
-                    selections: [
-                      {
-                        kind: 'Field',
-                        name: { kind: 'Name', value: 'data' },
-                        selectionSet: {
-                          kind: 'SelectionSet',
-                          selections: [
-                            {
-                              kind: 'Field',
-                              name: { kind: 'Name', value: 'id' },
-                            },
-                          ],
-                        },
-                      },
-                    ],
-                  },
-                },
-              ],
-            },
-          },
-        ],
-      },
-    },
-  ],
-} as unknown as DocumentNode<UploadFileMutation, UploadFileMutationVariables>
-export const AllFilesDocument = {
-  kind: 'Document',
-  definitions: [
-    {
-      kind: 'OperationDefinition',
-      operation: 'query',
-      name: { kind: 'Name', value: 'allFiles' },
-      selectionSet: {
-        kind: 'SelectionSet',
-        selections: [
-          {
-            kind: 'Field',
-            name: { kind: 'Name', value: 'files' },
-            selectionSet: {
-              kind: 'SelectionSet',
-              selections: [
-                { kind: 'Field', name: { kind: 'Name', value: 'id' } },
-                {
-                  kind: 'Field',
-                  name: { kind: 'Name', value: 'originalName' },
-                },
-                { kind: 'Field', name: { kind: 'Name', value: 'createdAt' } },
-                { kind: 'Field', name: { kind: 'Name', value: 'status' } },
-              ],
-            },
-          },
-        ],
-      },
-    },
-  ],
-} as unknown as DocumentNode<AllFilesQuery, AllFilesQueryVariables>
-export const DeleteFileDocument = {
-  kind: 'Document',
-  definitions: [
-    {
-      kind: 'OperationDefinition',
-      operation: 'mutation',
-      name: { kind: 'Name', value: 'DeleteFile' },
-      variableDefinitions: [
-        {
-          kind: 'VariableDefinition',
-          variable: {
-            kind: 'Variable',
-            name: { kind: 'Name', value: 'fileId' },
-          },
-          type: {
-            kind: 'NonNullType',
-            type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
-          },
-        },
-      ],
-      selectionSet: {
-        kind: 'SelectionSet',
-        selections: [
-          {
-            kind: 'Field',
-            name: { kind: 'Name', value: 'deleteFileUpload' },
-            arguments: [
-              {
-                kind: 'Argument',
-                name: { kind: 'Name', value: 'fileId' },
-                value: {
-                  kind: 'Variable',
-                  name: { kind: 'Name', value: 'fileId' },
-                },
-              },
-            ],
-            selectionSet: {
-              kind: 'SelectionSet',
-              selections: [
-                { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
-                {
-                  kind: 'InlineFragment',
-                  typeCondition: {
-                    kind: 'NamedType',
-                    name: { kind: 'Name', value: 'Error' },
-                  },
-                  selectionSet: {
-                    kind: 'SelectionSet',
-                    selections: [
-                      {
-                        kind: 'Field',
-                        name: { kind: 'Name', value: 'message' },
-                      },
-                    ],
-                  },
-                },
-                {
-                  kind: 'InlineFragment',
-                  typeCondition: {
-                    kind: 'NamedType',
-                    name: {
-                      kind: 'Name',
-                      value: 'MutationDeleteFileUploadSuccess',
-                    },
-                  },
-                  selectionSet: {
-                    kind: 'SelectionSet',
-                    selections: [
-                      { kind: 'Field', name: { kind: 'Name', value: 'data' } },
-                    ],
-                  },
-                },
-              ],
-            },
-          },
-        ],
-      },
-    },
-  ],
-} as unknown as DocumentNode<DeleteFileMutation, DeleteFileMutationVariables>
 export const ConversationSubDocument = {
   kind: 'Document',
   definitions: [
@@ -863,6 +662,20 @@ export const ConversationSubDocument = {
             },
           },
         },
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'fileIds' },
+          },
+          type: {
+            kind: 'ListType',
+            type: {
+              kind: 'NonNullType',
+              type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
+            },
+          },
+        },
       ],
       selectionSet: {
         kind: 'SelectionSet',
@@ -885,6 +698,14 @@ export const ConversationSubDocument = {
                 value: {
                   kind: 'Variable',
                   name: { kind: 'Name', value: 'message' },
+                },
+              },
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'fileIds' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'fileIds' },
                 },
               },
             ],
@@ -966,6 +787,112 @@ export const ConversationSubDocument = {
   ConversationSubSubscription,
   ConversationSubSubscriptionVariables
 >
+export const UploadFileDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'mutation',
+      name: { kind: 'Name', value: 'uploadFile' },
+      variableDefinitions: [
+        {
+          kind: 'VariableDefinition',
+          variable: { kind: 'Variable', name: { kind: 'Name', value: 'file' } },
+          type: {
+            kind: 'NonNullType',
+            type: {
+              kind: 'NamedType',
+              name: { kind: 'Name', value: 'Upload' },
+            },
+          },
+        },
+      ],
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'uploadFile' },
+            arguments: [
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'input' },
+                value: {
+                  kind: 'ObjectValue',
+                  fields: [
+                    {
+                      kind: 'ObjectField',
+                      name: { kind: 'Name', value: 'file' },
+                      value: {
+                        kind: 'Variable',
+                        name: { kind: 'Name', value: 'file' },
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: { kind: 'Name', value: 'Error' },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'message' },
+                      },
+                    ],
+                  },
+                },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: { kind: 'Name', value: 'MutationUploadFileSuccess' },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'data' },
+                        selectionSet: {
+                          kind: 'SelectionSet',
+                          selections: [
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'id' },
+                            },
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'originalName' },
+                            },
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'status' },
+                            },
+                          ],
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<UploadFileMutation, UploadFileMutationVariables>
 export const GetConversationDocument = {
   kind: 'Document',
   definitions: [
@@ -1296,6 +1223,23 @@ export const AllConversationsDocument = {
                         name: { kind: 'Name', value: 'content' },
                       },
                       { kind: 'Field', name: { kind: 'Name', value: 'role' } },
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'files' },
+                        selectionSet: {
+                          kind: 'SelectionSet',
+                          selections: [
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'id' },
+                            },
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'originalName' },
+                            },
+                          ],
+                        },
+                      },
                     ],
                   },
                 },
@@ -1360,6 +1304,23 @@ export const GetConversationWithMessagesDocument = {
                         name: { kind: 'Name', value: 'content' },
                       },
                       { kind: 'Field', name: { kind: 'Name', value: 'role' } },
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'files' },
+                        selectionSet: {
+                          kind: 'SelectionSet',
+                          selections: [
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'id' },
+                            },
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'originalName' },
+                            },
+                          ],
+                        },
+                      },
                     ],
                   },
                 },

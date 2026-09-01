@@ -13,48 +13,152 @@ pub struct RetrievalInput<'a> {
     pub db: &'a Db,
     /// The query embedding (computed once per turn for both sources).
     pub query_embedding: &'a [f32],
+    /// The conversation asking. File chunks are scoped to it; memories stay
+    /// global.
+    pub conversation_id: i64,
 }
 
 /// Top-4 memory contents by cosine similarity, most similar first.
 pub fn related_memories(input: &RetrievalInput<'_>) -> Result<Vec<String>, String> {
-    related_contents(
-        input,
-        "SELECT content, distance FROM memories
-         WHERE embedding MATCH ?1 ORDER BY distance LIMIT ?2",
-    )
+    if input.query_embedding.len() != EMBEDDING_DIM {
+        return Ok(Vec::new());
+    }
+    let conn = input.db.get().map_err(|err| err.to_string())?;
+    let query_blob = db::embedding_to_blob(input.query_embedding);
+    let mut stmt = conn
+        .prepare(
+            "SELECT content, distance FROM memories
+             WHERE embedding MATCH ?1 ORDER BY distance LIMIT ?2",
+        )
+        .map_err(|err| err.to_string())?;
+    let rows = knn_rows(
+        &mut stmt,
+        rusqlite::params![query_blob, RETRIEVAL_LIMIT as i64],
+    )?;
+    Ok(above_threshold(rows))
 }
-
-/// Top-4 file-chunk contents by cosine similarity, most similar first.
+/// Top-4 file-chunk contents from this conversation's attachments, most
+/// similar first.
+///
+/// vec0 KNN only optimizes bare queries on the virtual table (a JOIN makes
+/// it reject both parameterized and literal LIMITs), so this runs KNN over
+/// all chunks and filters to the conversation app-side — bounded by a
+/// desktop-scale corpus, and exactly correct (a distant chunk from another
+/// chat can't crowd out a close one from this chat).
 pub fn related_file_chunks(input: &RetrievalInput<'_>) -> Result<Vec<String>, String> {
-    related_contents(
-        input,
-        "SELECT content, distance FROM file_chunks
-         WHERE embedding MATCH ?1 ORDER BY distance LIMIT ?2",
-    )
-}
-
-fn related_contents(input: &RetrievalInput<'_>, sql: &str) -> Result<Vec<String>, String> {
     if input.query_embedding.len() != EMBEDDING_DIM {
         return Ok(Vec::new());
     }
 
     let conn = input.db.get().map_err(|err| err.to_string())?;
+    let conversation_file_ids: Vec<i64> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT f.id FROM files f
+                 JOIN messages m ON m.id = f.message_id
+                 WHERE m.conversation_id = ?1",
+            )
+            .map_err(|err| err.to_string())?;
+        let ids = stmt
+            .query_map([input.conversation_id], |row| row.get(0))
+            .map_err(|err| err.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| err.to_string())?;
+        ids
+    };
+    if conversation_file_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let total: i64 = conn
+        .query_row("SELECT COUNT(*) FROM file_chunks", [], |row| row.get(0))
+        .map_err(|err| err.to_string())?;
+    if total == 0 {
+        return Ok(Vec::new());
+    }
+
+    // KNN over the whole table (vec0 requires its k as a literal or bare
+    // `k = ?`); filter to the conversation afterwards.
     let query_blob = db::embedding_to_blob(input.query_embedding);
-    let mut stmt = conn.prepare(sql).map_err(|err| err.to_string())?;
-    let rows = stmt
-        .query_map(
-            rusqlite::params![query_blob, RETRIEVAL_LIMIT as i64],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)),
-        )
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT rowid, file_id, distance FROM file_chunks
+             WHERE embedding MATCH ?1 ORDER BY distance LIMIT {total}"
+        ))
+        .map_err(|err| err.to_string())?;
+    let knn = stmt
+        .query_map([query_blob], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, f64>(2)?,
+            ))
+        })
         .map_err(|err| err.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| err.to_string())?;
 
-    Ok(rows
-        .into_iter()
-        .filter(|(_, distance)| 1.0 - distance >= MIN_SIMILARITY - f64::EPSILON)
+    knn.into_iter()
+        .filter(|(_, file_id, distance)| {
+            conversation_file_ids.contains(file_id)
+                && 1.0 - distance >= MIN_SIMILARITY - f64::EPSILON
+        })
+        .take(RETRIEVAL_LIMIT)
+        .map(|(rowid, _, _)| chunk_content(&conn, rowid))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())
+}
+
+fn chunk_content(conn: &rusqlite::Connection, rowid: i64) -> rusqlite::Result<String> {
+    conn.query_row(
+        "SELECT content FROM file_chunks WHERE rowid = ?1",
+        [rowid],
+        |row| row.get(0),
+    )
+}
+
+/// Chunks from the conversation's files with no similarity filter — used for
+/// file-only turns (nothing meaningful to embed), oldest chunks first.
+pub fn conversation_chunks_head(db: &Db, conversation_id: i64) -> Result<Vec<String>, String> {
+    let conn = db.get().map_err(|err| err.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT fc.content FROM file_chunks fc
+             JOIN files f ON f.id = fc.file_id
+             JOIN messages m ON m.id = f.message_id
+             WHERE m.conversation_id = ?1 ORDER BY fc.rowid LIMIT ?2",
+        )
+        .map_err(|err| err.to_string())?;
+    let rows = stmt
+        .query_map(
+            rusqlite::params![conversation_id, RETRIEVAL_LIMIT as i64],
+            |row| row.get::<_, String>(0),
+        )
+        .map_err(|err| err.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())?;
+    Ok(rows)
+}
+
+fn knn_rows(
+    stmt: &mut rusqlite::Statement<'_>,
+    params: impl rusqlite::Params,
+) -> Result<Vec<(String, f64)>, String> {
+    stmt.query_map(params, |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+    })
+    .map_err(|err| err.to_string())?
+    .collect::<Result<Vec<_>, _>>()
+    .map_err(|err| err.to_string())
+}
+
+/// vec0 does not accept `distance` as a WHERE filter, so the ≥ 0.5 threshold
+/// is applied to the returned rows app-side (pinned by tests).
+fn above_threshold(rows: Vec<(String, f64)>) -> Vec<String> {
+    rows.into_iter()
+        .filter(|(_, distance)| 1.0 - *distance >= MIN_SIMILARITY - f64::EPSILON)
         .map(|(content, _)| content)
-        .collect())
+        .collect()
 }
 
 #[cfg(test)]
@@ -70,25 +174,53 @@ mod tests {
         embedding
     }
 
-    fn seed(pool: &Db, rows: &[(&str, Vec<f32>)], table: &str) {
+    /// Seeds memories directly.
+    fn seed_memories(pool: &Db, rows: &[(&str, Vec<f32>)]) {
         let conn = pool.get().unwrap();
         for (content, vector) in rows {
-            match table {
-                "memories" => conn
-                    .execute(
-                        "INSERT INTO memories (embedding, content) VALUES (?1, ?2)",
-                        rusqlite::params![db::embedding_to_blob(vector), content],
-                    )
-                    .unwrap(),
-                "file_chunks" => conn
-                    .execute(
-                        "INSERT INTO file_chunks (embedding, content, file_id) VALUES (?1, ?2, 1)",
-                        rusqlite::params![db::embedding_to_blob(vector), content],
-                    )
-                    .unwrap(),
-                other => panic!("unknown table {other}"),
-            };
+            conn.execute(
+                "INSERT INTO memories (embedding, content) VALUES (?1, ?2)",
+                rusqlite::params![db::embedding_to_blob(vector), content],
+            )
+            .unwrap();
         }
+    }
+
+    /// Creates a conversation + user message + file, then its chunks. Files
+    /// only ground through this chain now. Returns the conversation id.
+    fn seed_chat_file(pool: &Db, chunks: &[(&str, Vec<f32>)]) -> i64 {
+        let conn = pool.get().unwrap();
+        conn.execute(
+            "INSERT INTO conversations (title, created_at, updated_at)
+             VALUES ('chat', '0', '0')",
+            [],
+        )
+        .unwrap();
+        let conversation_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO messages (conversation_id, role, content, created_at)
+             VALUES (?1, 'USER', 'see attachment', '0')",
+            [conversation_id],
+        )
+        .unwrap();
+        let message_id = conn.last_insert_rowid();
+        let file_name = format!("doc-{conversation_id}.txt");
+        conn.execute(
+            "INSERT INTO files (original_name, file_name, mime_type, size, kind, status,
+                                processed_at, created_at, message_id)
+             VALUES (?1, ?2, 'text/plain', 1, 'TEXT', 'PROCESSED', '0', '0', ?3)",
+            rusqlite::params!["doc.txt", file_name, message_id],
+        )
+        .unwrap();
+        let file_id = conn.last_insert_rowid();
+        for (content, vector) in chunks {
+            conn.execute(
+                "INSERT INTO file_chunks (embedding, content, file_id) VALUES (?1, ?2, ?3)",
+                rusqlite::params![db::embedding_to_blob(vector), content, file_id],
+            )
+            .unwrap();
+        }
+        conversation_id
     }
 
     #[tokio::test]
@@ -96,7 +228,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let pool = crate::db::init(dir.path()).unwrap();
 
-        seed(
+        seed_memories(
             &pool,
             &[
                 ("exact", sparse(1.0, 0.0)),
@@ -104,12 +236,12 @@ mod tests {
                 ("weak", sparse(0.3, 0.9)),
                 ("orthogonal", sparse(0.0, 1.0)),
             ],
-            "memories",
         );
 
         let input = RetrievalInput {
             db: &pool,
             query_embedding: &sparse(1.0, 0.0),
+            conversation_id: 1,
         };
         let memories = related_memories(&input).unwrap();
 
@@ -118,27 +250,52 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_chunk_retrieval_is_filtered_and_ordered() {
+    async fn file_chunk_retrieval_is_scoped_to_the_conversation() {
         let dir = tempfile::TempDir::new().unwrap();
         let pool = crate::db::init(dir.path()).unwrap();
 
-        seed(
+        seed_chat_file(
             &pool,
             &[
                 ("far", sparse(0.0, 1.0)),
                 ("best", sparse(1.0, 0.0)),
                 ("mid", sparse(0.5, 0.75f32.sqrt())),
             ],
-            "file_chunks",
         );
+        let other = seed_chat_file(&pool, &[("other chat secret", sparse(1.0, 0.0))]);
 
         let input = RetrievalInput {
             db: &pool,
             query_embedding: &sparse(1.0, 0.0),
+            conversation_id: 1,
         };
         let chunks = related_file_chunks(&input).unwrap();
 
+        // The other chat's file is invisible from conversation 1; below-
+        // threshold rows drop.
         assert_eq!(chunks, vec!["best".to_string(), "mid".to_string()]);
+        assert!(!chunks.contains(&"other chat secret".to_string()));
+        let _ = other;
+    }
+
+    #[tokio::test]
+    async fn file_chunks_head_ignores_similarity() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pool = crate::db::init(dir.path()).unwrap();
+
+        seed_chat_file(
+            &pool,
+            &[
+                ("first chunk", sparse(0.0, 1.0)),
+                ("second chunk", sparse(0.0, 1.0)),
+                ("third chunk", sparse(0.0, 1.0)),
+            ],
+        );
+
+        // Orthogonal to everything — still returned, in stored order.
+        let chunks = conversation_chunks_head(&pool, 1).unwrap();
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0], "first chunk");
     }
 
     #[tokio::test]
@@ -146,11 +303,12 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let pool = crate::db::init(dir.path()).unwrap();
 
-        seed(&pool, &[("exact", sparse(1.0, 0.0))], "memories");
+        seed_memories(&pool, &[("exact", sparse(1.0, 0.0))]);
 
         let input = RetrievalInput {
             db: &pool,
             query_embedding: &[1.0; 8],
+            conversation_id: 1,
         };
         assert!(related_memories(&input).unwrap().is_empty());
     }
@@ -160,13 +318,12 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let pool = crate::db::init(dir.path()).unwrap();
 
-        seed(
+        seed_memories(
             &pool,
             &[
                 ("apple note", sparse(1.0, 0.0)),
                 ("banana note", sparse(0.0, 1.0)),
             ],
-            "memories",
         );
 
         let embedder = FakeEmbedder::by_keyword(&["apple", "banana"]);
@@ -175,6 +332,7 @@ mod tests {
         let input = RetrievalInput {
             db: &pool,
             query_embedding: &query,
+            conversation_id: 1,
         };
         let memories = related_memories(&input).unwrap();
         assert_eq!(memories, vec!["apple note".to_string()]);

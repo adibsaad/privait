@@ -6,7 +6,7 @@
 //!
 //! Usage: `cargo run --example serve_dev`
 
-use privait_lib::{db, embeddings, jobs, schema, server, storage};
+use privait_lib::{db, embeddings, files, jobs, schema, server, storage};
 use std::sync::Arc;
 
 #[tokio::main]
@@ -26,6 +26,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let embedder: Arc<dyn embeddings::Embedder> =
         Arc::new(embeddings::FastEmbedder::new(data_dir.join("models")));
 
+    // Same startup sweep the app runs: uploads happen on send, so stored-
+    // but-never-attached files are dead ends.
+    files::gc_orphan_uploads(&db, &file_storage).await;
+
     tokio::spawn(jobs::run_worker(
         jobs.clone(),
         jobs::PipelineDeps {
@@ -39,7 +43,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         schema::SchemaContext {
             db,
             storage: Some(file_storage),
-            jobs: Some(jobs),
             embedder,
         },
         schema::FirstChunkTimeout::default().0,

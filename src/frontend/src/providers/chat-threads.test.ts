@@ -218,3 +218,71 @@ describe('reconcileThreadList', () => {
     expect(next).toHaveLength(2)
   })
 })
+
+describe('userMessage attachments', () => {
+  it('carries attachment chips only when files are attached', () => {
+    const plain = userMessage('1', 'hello')
+    expect('attachments' in plain).toBe(false)
+
+    const withFiles = userMessage('1', 'hello', [
+      { id: 'f1', name: 'notes.md' },
+      { id: 'f2', name: 'report.pdf' },
+    ])
+
+    expect(withFiles.attachments).toEqual([
+      {
+        id: 'f1',
+        type: 'document',
+        name: 'notes.md',
+        contentType: 'text/markdown',
+        status: { type: 'complete' },
+        content: [],
+      },
+      {
+        id: 'f2',
+        type: 'document',
+        name: 'report.pdf',
+        contentType: 'application/pdf',
+        status: { type: 'complete' },
+        content: [],
+      },
+    ])
+  })
+
+  it('keeps the optimistic chips through reconciliation', () => {
+    const attachments = [{ id: 'f1', name: 'a.md' }]
+    const threads = new Map([
+      [
+        '7',
+        withOptimisticUserMessage(new Map(), '7', '', attachments).get('7')!,
+      ],
+    ])
+
+    const next = reconcileFirstChunk(
+      threads,
+      '7',
+      userMessage('99', '', attachments),
+    )
+
+    const persisted = next.get('7')?.find(m => m.id === '99')
+    expect(persisted?.attachments).toHaveLength(1)
+    expect(next.get('7')?.some(m => m.id === 'temp-user')).toBe(false)
+  })
+
+  it('drops the temp bucket when the thread only exists optimistically', () => {
+    const threads = withOptimisticUserMessage(new Map(), EMPTY_THREAD_ID, '', [
+      { id: 'f1', name: 'a.md' },
+    ])
+
+    const next = reconcileFirstChunk(
+      threads,
+      '42',
+      userMessage('9', '', [{ id: 'f1', name: 'a.md' }]),
+    )
+
+    expect(next.has(EMPTY_THREAD_ID)).toBe(false)
+    expect(next.get('42')?.[0]).toEqual(
+      userMessage('9', '', [{ id: 'f1', name: 'a.md' }]),
+    )
+  })
+})

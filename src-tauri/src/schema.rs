@@ -12,7 +12,6 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::db::{self, Db};
 use crate::embeddings::Embedder;
 use crate::files::{self, FileRow};
-use crate::jobs::Jobs;
 use crate::provider::{ChatMessage, ChatProvider, ChatRequest, ChatRole, OpenAiCompatProvider};
 use crate::retrieval::{self, RetrievalInput};
 use crate::storage::Storage;
@@ -103,12 +102,42 @@ impl GqlConversation {
     }
 }
 
-#[derive(Debug, Clone, SimpleObject)]
-#[graphql(name = "Message")]
+#[derive(Debug, Clone)]
 pub struct GqlMessage {
     pub id: ID,
     pub role: MessageRole,
     pub content: String,
+}
+
+#[Object(name = "Message")]
+impl GqlMessage {
+    async fn id(&self) -> ID {
+        self.id.clone()
+    }
+
+    async fn role(&self) -> MessageRole {
+        self.role
+    }
+
+    async fn content(&self) -> &str {
+        &self.content
+    }
+
+    /// Attachments carried by this message — lets chat history re-render
+    /// the file chips after a reload.
+    async fn files(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<GqlFileUpload>> {
+        let db = ctx.data::<Db>()?;
+        let conn = db.get()?;
+        let id: i64 = self
+            .id
+            .0
+            .parse()
+            .map_err(|_| async_graphql::Error::new("invalid message id"))?;
+        Ok(files::files_for_message(&conn, id)?
+            .into_iter()
+            .map(|row| GqlFileUpload { row })
+            .collect())
+    }
 }
 
 #[derive(Debug, Clone, Default, SimpleObject)]
@@ -538,8 +567,11 @@ impl Mutation {
     }
 
     /// Persists a validated upload (5MB cap, MIME allowlist) to storage and
-    /// the `files` table, then enqueues the process-file job. The row is
-    /// returned with status UPLOADED; the worker flips it to PROCESSED.
+    /// the `files` table, then runs the extract → chunk → embed pipeline
+    /// inline and returns the PROCESSED row. Upload happens on send, so the
+    /// user is waiting on the result — background processing (the apalis
+    /// worker) is no longer in this path. On pipeline failure the upload is
+    /// rolled back so nothing lingers unprocessed.
     async fn upload_file(
         &self,
         ctx: &Context<'_>,
@@ -553,9 +585,9 @@ impl Mutation {
                 ))
             }
         };
-        let jobs = match ctx.data::<Option<Jobs>>() {
-            Ok(Some(jobs)) => Some(jobs.clone()),
-            Ok(None) | Err(_) => None,
+        let embedder = match ctx.data::<Arc<dyn Embedder>>() {
+            Ok(embedder) => embedder.clone(),
+            Err(err) => return MutationUploadFileResult::Error(GqlError::new(err.message)),
         };
         let db = match ctx.data::<Db>() {
             Ok(db) => db,
@@ -587,23 +619,31 @@ impl Mutation {
             Err(message) => return MutationUploadFileResult::Error(GqlError::new(message)),
         };
 
-        if let Some(jobs) = jobs {
-            if let Err(err) = jobs
-                .push_job(crate::jobs::ProcessFileJob { file_id: row.id })
-                .await
-            {
-                // Clean up the half-registered upload rather than leaving a
-                // file stuck in UPLOADED forever.
-                let _ = files::delete_upload(db, &storage, row.id).await;
-                return MutationUploadFileResult::Error(GqlError::new(format!(
-                    "Failed to queue file processing: {err}"
-                )));
-            }
+        let deps = files::PipelineDeps {
+            db: db.clone(),
+            storage,
+            embedder,
+        };
+        if let Err(message) = files::process_uploaded_file(&deps, row.id).await {
+            let _ = files::delete_upload(db, &deps.storage, row.id).await;
+            return MutationUploadFileResult::Error(GqlError::new(format!(
+                "Could not process file: {message}"
+            )));
         }
 
-        MutationUploadFileResult::MutationUploadFileSuccess(MutationUploadFileSuccess {
-            data: GqlFileUpload { row },
-        })
+        let refreshed_row: Result<Option<files::FileRow>, String> = (|| {
+            let conn = db.get().map_err(|err| err.to_string())?;
+            files::get_file(&conn, row.id).map_err(|err| err.to_string())
+        })();
+        match refreshed_row {
+            Ok(Some(row)) => {
+                MutationUploadFileResult::MutationUploadFileSuccess(MutationUploadFileSuccess {
+                    data: GqlFileUpload { row },
+                })
+            }
+            Ok(None) => MutationUploadFileResult::Error(GqlError::new("Failed to upload file")),
+            Err(err) => MutationUploadFileResult::Error(GqlError::new(err)),
+        }
     }
 
     /// Removes the upload, its stored bytes, and its vector chunks.
@@ -685,6 +725,41 @@ fn conversation_title(prompt: &str) -> String {
 }
 
 fn select_messages(conn: &Connection, conversation_id: i64) -> rusqlite::Result<Vec<GqlMessage>> {
+    // Attachments ride along in one batched query so history re-renders
+    // chips after reload.
+    let mut files_stmt = conn.prepare(
+        "SELECT m.id, f.id, f.original_name, f.file_name, f.mime_type, f.size, f.kind,
+                f.status, f.processed_at, f.created_at
+         FROM messages m
+         JOIN files f ON f.message_id = m.id
+         WHERE m.conversation_id = ?1
+         ORDER BY f.id ASC",
+    )?;
+    let mut files_by_message: std::collections::HashMap<i64, Vec<files::FileRow>> =
+        Default::default();
+    files_stmt
+        .query_map([conversation_id], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                files::FileRow {
+                    id: row.get(1)?,
+                    original_name: row.get(2)?,
+                    file_name: row.get(3)?,
+                    mime_type: row.get(4)?,
+                    size: row.get(5)?,
+                    kind: row.get(6)?,
+                    status: row.get(7)?,
+                    processed_at: row.get(8)?,
+                    created_at: row.get(9)?,
+                },
+            ))
+        })?
+        .for_each(|entry| {
+            if let Ok((message_id, row)) = entry {
+                files_by_message.entry(message_id).or_default().push(row);
+            }
+        });
+
     let mut stmt = conn.prepare(
         "SELECT id, role, content FROM messages
          WHERE conversation_id = ?1 ORDER BY id ASC",
@@ -739,6 +814,12 @@ impl Subscription {
     /// conversation; the new user message and an empty assistant message are
     /// persisted up front, then provider chunks stream over this subscription.
     ///
+    /// `fileIds` are uploads sent with this turn (the composer uploads them
+    /// right before subscribing). They are attached to the user message here;
+    /// file chunks from this conversation ground the turn. `message` may be
+    /// empty when files are attached — the model then receives a synthesized
+    /// instruction while the bubble keeps just the chips.
+    ///
     /// Kill switch: dropping the subscription (stop button / disconnect)
     /// drops the receiver below; the pump task notices the failed send,
     /// aborts the provider request, and persists the partial reply.
@@ -747,9 +828,22 @@ impl Subscription {
         ctx: &Context<'_>,
         conversation_id: Option<i64>,
         message: String,
+        file_ids: Option<Vec<i64>>,
     ) -> async_graphql::Result<ReceiverStream<SubscriptionConversationResult>> {
         let db = ctx.data::<Db>()?.clone();
         let conn = db.get()?;
+
+        let file_ids = file_ids.unwrap_or_default();
+        let attached_files: Vec<files::FileRow> = {
+            let mut rows = Vec::with_capacity(file_ids.len());
+            for file_id in &file_ids {
+                if let Some(row) = files::get_file(&conn, *file_id)? {
+                    rows.push(row);
+                }
+            }
+            rows
+        };
+        let has_files = !attached_files.is_empty();
 
         let conversation_id = match conversation_id {
             Some(conversation_id) => {
@@ -767,9 +861,15 @@ impl Subscription {
             }
             None => {
                 let now = now_iso();
+                // A file-only first message titles the thread from its first
+                // file; otherwise from the prompt.
+                let title = match message.trim().is_empty() && has_files {
+                    true => conversation_title(&attached_files[0].original_name),
+                    false => conversation_title(&message),
+                };
                 conn.execute(
                     "INSERT INTO conversations (title, created_at, updated_at) VALUES (?1, ?2, ?3)",
-                    params![conversation_title(&message), now, now],
+                    params![title, now, now],
                 )?;
                 conn.last_insert_rowid()
             }
@@ -792,25 +892,45 @@ impl Subscription {
         let user_message_id = insert_message(&conn, conversation_id, "USER", &message)?;
         let assistant_message_id = insert_message(&conn, conversation_id, "ASSISTANT", "")?;
 
-        // Ground the turn: embed the prompt once and pull top-4 memories +
-        // top-4 file chunks (similarity ≥ 0.5) as system context — the same
-        // shape the old subscription built. Embedding failures degrade to an
-        // ungrounded turn instead of failing chat (e.g. the embedding model
-        // is still downloading on first launch).
+        if has_files {
+            files::link_to_message(&conn, &file_ids, user_message_id)?;
+        }
+
+        // The model's user turn: the prompt, or a synthesized instruction for
+        // a file-only send (the persisted bubble keeps its empty text).
+        let prompt_for_provider = match message.trim().is_empty() && has_files {
+            true => "Please read the attached file(s) and respond.".to_string(),
+            false => message.clone(),
+        };
+
+        // Ground the turn: embed the prompt once and pull top-4 memories
+        // (global) + top-4 chunks from this conversation's attachments
+        // (similarity ≥ 0.5) as system context. A file-only send has nothing
+        // meaningful to embed, so it takes the conversation's opening chunks
+        // and skips memories. Embedding failures degrade to an ungrounded
+        // turn instead of failing chat (e.g. the model is still downloading).
         let embedder = ctx.data::<Arc<dyn Embedder>>()?.clone();
-        let grounding = match embedder.embed(&message).await {
-            Ok(query_embedding) => {
-                let input = RetrievalInput {
-                    db: &db,
-                    query_embedding: &query_embedding,
-                };
-                let memories = retrieval::related_memories(&input).unwrap_or_default();
-                let chunks = retrieval::related_file_chunks(&input).unwrap_or_default();
-                (memories, chunks)
-            }
-            Err(err) => {
-                eprintln!("[privait] retrieval skipped, embedding failed: {err}");
-                (Vec::new(), Vec::new())
+        let grounding = if message.trim().is_empty() && has_files {
+            (
+                Vec::new(),
+                retrieval::conversation_chunks_head(&db, conversation_id).unwrap_or_default(),
+            )
+        } else {
+            match embedder.embed(&prompt_for_provider).await {
+                Ok(query_embedding) => {
+                    let input = RetrievalInput {
+                        db: &db,
+                        query_embedding: &query_embedding,
+                        conversation_id,
+                    };
+                    let memories = retrieval::related_memories(&input).unwrap_or_default();
+                    let chunks = retrieval::related_file_chunks(&input).unwrap_or_default();
+                    (memories, chunks)
+                }
+                Err(err) => {
+                    eprintln!("[privait] retrieval skipped, embedding failed: {err}");
+                    (Vec::new(), Vec::new())
+                }
             }
         };
 
@@ -848,7 +968,7 @@ impl Subscription {
 
         request_messages.push(ChatMessage {
             role: ChatRole::User,
-            content: message,
+            content: prompt_for_provider,
         });
 
         let (tx, rx) = tokio::sync::mpsc::channel::<SubscriptionConversationResult>(64);
@@ -998,12 +1118,11 @@ impl Default for FirstChunkTimeout {
 pub type AppSchema = async_graphql::Schema<Query, Mutation, Subscription>;
 
 /// Everything the schema's resolvers reach for beyond the content DB.
-/// `storage`/`jobs` are `None` only in test/dev schemas that never touch
-/// uploads — the resolvers surface a clean `Error` arm in that case.
+/// `storage` is `None` only in test/dev schemas that never touch uploads —
+/// the resolvers surface a clean `Error` arm in that case.
 pub struct SchemaContext {
     pub db: Db,
     pub storage: Option<Arc<Storage>>,
-    pub jobs: Option<Jobs>,
     pub embedder: Arc<dyn Embedder>,
 }
 
@@ -1019,7 +1138,6 @@ pub fn build_schema_with_timeout(db: Db, timeout: Duration) -> AppSchema {
         SchemaContext {
             db,
             storage: None,
-            jobs: None,
             embedder,
         },
         timeout,
@@ -1030,7 +1148,6 @@ pub fn build_schema_with_context(ctx: SchemaContext, timeout: Duration) -> AppSc
     async_graphql::Schema::build(Query, Mutation, Subscription)
         .data(ctx.db)
         .data(ctx.storage)
-        .data(ctx.jobs)
         .data(ctx.embedder)
         .data(FirstChunkTimeout(timeout))
         .finish()
@@ -1158,8 +1275,8 @@ mod tests {
     }
 
     const SUBSCRIPTION_QUERY: &str = r#"
-        subscription ConversationSub($conversationId: Int, $message: String!) {
-            conversation(conversationId: $conversationId, message: $message) {
+        subscription ConversationSub($conversationId: Int, $message: String!, $fileIds: [Int!]) {
+            conversation(conversationId: $conversationId, message: $message, fileIds: $fileIds) {
                 __typename
                 ... on SubscriptionConversationSuccess {
                     data {
@@ -1178,10 +1295,19 @@ mod tests {
     "#;
 
     fn subscription_request(conversation_id: Option<i64>, message: &str) -> async_graphql::Request {
+        subscription_request_with_files(conversation_id, message, &[])
+    }
+
+    fn subscription_request_with_files(
+        conversation_id: Option<i64>,
+        message: &str,
+        file_ids: &[i64],
+    ) -> async_graphql::Request {
         async_graphql::Request::new(SUBSCRIPTION_QUERY).variables(
             async_graphql::Variables::from_value(async_graphql::value!({
                 "message": message,
                 "conversationId": conversation_id,
+                "fileIds": file_ids,
             })),
         )
     }
@@ -1723,14 +1849,12 @@ mod tests {
     fn upload_context(
         db: Db,
         storage: crate::storage::Storage,
-        jobs: Option<crate::jobs::Jobs>,
         embedder: Arc<dyn Embedder>,
     ) -> AppSchema {
         build_schema_with_context(
             SchemaContext {
                 db,
                 storage: Some(Arc::new(storage)),
-                jobs,
                 embedder,
             },
             FirstChunkTimeout::default().0,
@@ -1816,7 +1940,6 @@ mod tests {
         let schema = upload_context(
             db,
             crate::storage::Storage::memory().unwrap(),
-            None,
             Arc::new(crate::embeddings::FakeEmbedder::new(|_| {
                 vec![0.0; db::EMBEDDING_DIM]
             })),
@@ -1839,7 +1962,7 @@ mod tests {
         assert_eq!(result["__typename"], json!("MutationUploadFileSuccess"));
         assert_eq!(result["data"]["originalName"], json!("notes.md"));
         assert_eq!(result["data"]["type"], json!("TEXT"));
-        assert_eq!(result["data"]["status"], json!("UPLOADED"));
+        assert_eq!(result["data"]["status"], json!("PROCESSED"));
 
         // The file list query sees the new row.
         let response = router
@@ -1862,7 +1985,7 @@ mod tests {
         let files = payload["data"]["files"].as_array().unwrap();
         assert_eq!(files.len(), 1);
         assert_eq!(files[0]["originalName"], json!("notes.md"));
-        assert_eq!(files[0]["status"], json!("UPLOADED"));
+        assert_eq!(files[0]["status"], json!("PROCESSED"));
         assert_eq!(files[0]["type"], json!("TEXT"));
     }
 
@@ -1873,7 +1996,6 @@ mod tests {
         let schema = upload_context(
             db,
             crate::storage::Storage::memory().unwrap(),
-            None,
             Arc::new(crate::embeddings::FakeEmbedder::new(|_| {
                 vec![0.0; db::EMBEDDING_DIM]
             })),
@@ -1915,24 +2037,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn upload_enqueues_processing_and_the_worker_completes_it() {
-        use crate::jobs::{Jobs, PipelineDeps};
-
+    async fn upload_processes_inline_and_returns_processed() {
         let dir = tempfile::TempDir::new().unwrap();
         let db = crate::db::init(dir.path()).unwrap();
-        let jobs = Jobs::init(&dir.path().join("jobs.db")).await.unwrap();
         let storage = crate::storage::Storage::memory().unwrap();
         let embedder: Arc<dyn Embedder> = Arc::new(crate::embeddings::FakeEmbedder::new(|text| {
             let mut vector = vec![0.0f32; db::EMBEDDING_DIM];
             vector[0] = text.len() as f32;
             vector
         }));
-        let schema = upload_context(
-            db.clone(),
-            storage.clone(),
-            Some(jobs.clone()),
-            embedder.clone(),
-        );
+        let schema = upload_context(db.clone(), storage, embedder);
 
         let token = crate::server::generate_token();
         let mut router = crate::server::build_router(schema, token.clone());
@@ -1946,39 +2060,13 @@ mod tests {
             b"grounded chat needs embeddings for this text.",
         );
         let payload = post_multipart(&mut router, &token, body, "graphql").await;
-        let file_id: i64 = payload["data"]["uploadFile"]["data"]["id"]
-            .as_str()
-            .unwrap()
-            .parse()
-            .unwrap();
+        let result = &payload["data"]["uploadFile"];
 
-        // The queued job flips the status; vectors land in file_chunks.
-        tokio::spawn(crate::jobs::run_worker(
-            jobs,
-            PipelineDeps {
-                db: db.clone(),
-                storage: Arc::new(storage),
-                embedder,
-            },
-        ));
-
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-        loop {
-            let conn = db.get().unwrap();
-            let status: String = conn
-                .query_row("SELECT status FROM files WHERE id = ?1", [file_id], |row| {
-                    row.get(0)
-                })
-                .unwrap();
-            if status == "PROCESSED" {
-                break;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "worker never processed file {file_id}"
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
+        // Inline processing: the mutation returns the row already PROCESSED
+        // with its vectors in place — the send path never polls.
+        assert_eq!(result["__typename"], json!("MutationUploadFileSuccess"));
+        assert_eq!(result["data"]["status"], json!("PROCESSED"));
+        let file_id: i64 = result["data"]["id"].as_str().unwrap().parse().unwrap();
 
         let chunks: i64 = {
             let conn = db.get().unwrap();
@@ -1993,6 +2081,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn upload_pipeline_failure_rolls_back_and_reports() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = crate::db::init(dir.path()).unwrap();
+        // Valid multipart file whose contents are not a real PDF.
+        let storage = crate::storage::Storage::memory().unwrap();
+        let embedder: Arc<dyn Embedder> = Arc::new(crate::embeddings::FakeEmbedder::new(|_| {
+            vec![0.0; db::EMBEDDING_DIM]
+        }));
+        let schema = upload_context(db.clone(), storage, embedder);
+
+        let token = crate::server::generate_token();
+        let mut router = crate::server::build_router(schema, token.clone());
+        let body = multipart_body(
+            "graphql",
+            UPLOAD_MUTATION,
+            json!({ "file": null }),
+            "file",
+            "broken.pdf",
+            "application/pdf",
+            b"not really a pdf",
+        );
+        let payload = post_multipart(&mut router, &token, body, "graphql").await;
+
+        assert_eq!(payload["data"]["uploadFile"]["__typename"], json!("Error"));
+        assert!(
+            payload["data"]["uploadFile"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("Could not process file"),
+            "got: {:?}",
+            payload["data"]["uploadFile"]["message"]
+        );
+
+        // Rolled back: no half-processed row lingers.
+        let rows: i64 = {
+            let conn = db.get().unwrap();
+            conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(rows, 0);
+    }
+
+    #[tokio::test]
     async fn delete_file_upload_removes_row_bytes_and_chunks() {
         let dir = tempfile::TempDir::new().unwrap();
         let db = crate::db::init(dir.path()).unwrap();
@@ -2000,7 +2131,6 @@ mod tests {
         let schema = upload_context(
             db.clone(),
             storage.clone(),
-            None,
             Arc::new(crate::embeddings::FakeEmbedder::new(|_| {
                 vec![0.0; db::EMBEDDING_DIM]
             })),
@@ -2122,6 +2252,7 @@ mod tests {
 
         {
             let conn = db.get().unwrap();
+
             let store = |slot: usize| {
                 let mut vector = vec![0.0f32; db::EMBEDDING_DIM];
                 vector[slot] = 1.0;
@@ -2134,6 +2265,29 @@ mod tests {
                 )
                 .unwrap();
             }
+
+            // Persisted conversation with an attached file: chat 7's chunks
+            // must ground chat 7 and only chat 7.
+            conn.execute(
+                "INSERT INTO conversations (id, title, created_at, updated_at)
+                 VALUES (7, 'attached chat', '0', '0')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO messages (id, conversation_id, role, content, created_at)
+                 VALUES (1, 7, 'USER', 'here is my file', '0')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO files (id, original_name, file_name, mime_type, size, kind,
+                                    status, processed_at, created_at, message_id)
+                 VALUES (1, 'notes.txt', 'notes.txt', 'text/plain', 1, 'TEXT',
+                         'PROCESSED', '0', '0', 1)",
+                [],
+            )
+            .unwrap();
             for (content, slot) in [("apple chunk", 0usize), ("banana chunk", 1usize)] {
                 conn.execute(
                     "INSERT INTO file_chunks (embedding, content, file_id) VALUES (?1, ?2, 1)",
@@ -2149,13 +2303,9 @@ mod tests {
             seed_provider_settings(&conn, &base_url).await;
         }
 
-        let schema = upload_context(
-            db,
-            crate::storage::Storage::memory().unwrap(),
-            None,
-            embedder,
-        );
-        let mut stream = schema.execute_stream(subscription_request(None, "tell me about apples"));
+        let schema = upload_context(db, crate::storage::Storage::memory().unwrap(), embedder);
+        let mut stream =
+            schema.execute_stream(subscription_request(Some(7), "tell me about apples"));
 
         let mut saw_done = false;
         while let Some(response) = stream.next().await {
@@ -2173,19 +2323,20 @@ mod tests {
             .map(|m| m["content"].as_str().unwrap_or_default())
             .collect();
 
-        // Only the apple-context rows clear the 0.5 threshold; both system
-        // messages ride between the (empty) history and the user turn.
+        // Only the apple rows clear the 0.5 threshold; both system messages
+        // ride between the history and the user turn.
         assert_eq!(
             contents,
             vec![
+                "here is my file",
                 "Here are some related memories: apple memory",
                 "Here are some related file chunks: apple chunk",
                 "tell me about apples",
             ]
         );
-        assert_eq!(messages[0]["role"], json!("system"));
         assert_eq!(messages[1]["role"], json!("system"));
-        assert_eq!(messages[2]["role"], json!("user"));
+        assert_eq!(messages[2]["role"], json!("system"));
+        assert_eq!(messages[3]["role"], json!("user"));
     }
 
     #[tokio::test]
@@ -2202,12 +2353,7 @@ mod tests {
         let embedder: Arc<dyn Embedder> = Arc::new(crate::embeddings::FakeEmbedder::new(|_| {
             vec![0.0; db::EMBEDDING_DIM]
         }));
-        let schema = upload_context(
-            db,
-            crate::storage::Storage::memory().unwrap(),
-            None,
-            embedder,
-        );
+        let schema = upload_context(db, crate::storage::Storage::memory().unwrap(), embedder);
         let mut stream = schema.execute_stream(subscription_request(None, "hi"));
         while stream.next().await.is_some() {}
 
@@ -2220,6 +2366,297 @@ mod tests {
         );
         assert_eq!(messages[0]["role"], json!("user"));
         assert_eq!(messages[0]["content"], json!("hi"));
+    }
+
+    #[tokio::test]
+    async fn file_ids_attach_to_the_user_message_and_ground_the_turn() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = crate::db::init(dir.path()).unwrap();
+        let storage = crate::storage::Storage::memory().unwrap();
+
+        // Two uploads (as the composer would create on send) plus a decoy.
+        let first = crate::files::store_upload(
+            &db,
+            &storage,
+            b"attachment one".to_vec(),
+            "one.txt",
+            "text/plain",
+        )
+        .await
+        .unwrap();
+        let second = crate::files::store_upload(
+            &db,
+            &storage,
+            b"attachment two".to_vec(),
+            "two.txt",
+            "text/plain",
+        )
+        .await
+        .unwrap();
+        let _decoy = crate::files::store_upload(
+            &db,
+            &storage,
+            b"not part of this send".to_vec(),
+            "decoy.txt",
+            "text/plain",
+        )
+        .await
+        .unwrap();
+
+        let (base_url, captured) = spawn_capturing_mock_provider(vec!["ok"]).await;
+        {
+            let conn = db.get().unwrap();
+            seed_provider_settings(&conn, &base_url).await;
+        }
+
+        let embedder: Arc<dyn Embedder> = Arc::new(crate::embeddings::FakeEmbedder::new(|_| {
+            vec![0.0; db::EMBEDDING_DIM]
+        }));
+        let schema = upload_context(db.clone(), storage, embedder);
+
+        let mut stream = schema.execute_stream(subscription_request_with_files(
+            None,
+            "what did I attach?",
+            &[first.id, second.id],
+        ));
+        while stream.next().await.is_some() {}
+
+        // Both files ended up on the persisted user message.
+        let conn = db.get().unwrap();
+        let user_message_id: i64 = conn
+            .query_row(
+                "SELECT id FROM messages WHERE role = 'USER' ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let linked: Vec<String> = crate::files::files_for_message(&conn, user_message_id)
+            .unwrap()
+            .into_iter()
+            .map(|row| row.original_name)
+            .collect();
+        assert_eq!(linked, vec!["one.txt".to_string(), "two.txt".to_string()]);
+
+        // The decoy stays unattached.
+        let orphans: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE message_id IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(orphans, 1);
+
+        // History re-renders the chips: Message.files carries both.
+        let response = schema
+            .execute(
+                "{ conversation(conversationId: 1) { messages { role files { originalName } } } }"
+                    .to_string(),
+            )
+            .await
+            .into_result()
+            .unwrap();
+        let data = serde_json::to_value(&response.data).unwrap();
+        let user_message = data["conversation"]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == json!("USER"))
+            .unwrap();
+        assert_eq!(
+            user_message["files"].as_array().unwrap().len(),
+            2,
+            "chips persist on the user message: {user_message}"
+        );
+
+        // The provider saw the same two files' turn (capturing mock drew no
+        // chunks, so grounding contributed nothing — verified separately).
+        let request = captured.lock().unwrap().clone().unwrap();
+        let contents: Vec<&str> = request["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["content"].as_str().unwrap_or_default())
+            .collect();
+        assert!(contents.contains(&"what did I attach?"));
+    }
+
+    #[tokio::test]
+    async fn file_only_send_synthesizes_the_prompt_and_titles_from_the_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = crate::db::init(dir.path()).unwrap();
+        let _storage = crate::storage::Storage::memory().unwrap();
+
+        // A processed attachment whose chunks will ground via the head path.
+        let storage = crate::storage::Storage::memory().unwrap();
+        let embedder: Arc<dyn Embedder> = Arc::new(crate::embeddings::FakeEmbedder::new(|_| {
+            vec![0.0; db::EMBEDDING_DIM]
+        }));
+        let file = crate::files::store_upload(
+            &db,
+            &storage,
+            b"the marble archive opens at dusk only".to_vec(),
+            "archive-notes.md",
+            "text/markdown",
+        )
+        .await
+        .unwrap();
+        // Run the inline pipeline so the chunk exists for the head retrieval.
+        crate::files::process_uploaded_file(
+            &crate::files::PipelineDeps {
+                db: db.clone(),
+                storage: std::sync::Arc::new(storage.clone()),
+                embedder: embedder.clone(),
+            },
+            file.id,
+        )
+        .await
+        .unwrap();
+
+        let (base_url, captured) = spawn_capturing_mock_provider(vec!["read it"]).await;
+        {
+            let conn = db.get().unwrap();
+            seed_provider_settings(&conn, &base_url).await;
+        }
+
+        let embedder: Arc<dyn Embedder> = Arc::new(crate::embeddings::FakeEmbedder::new(|_| {
+            vec![0.0; db::EMBEDDING_DIM]
+        }));
+        let schema = upload_context(db.clone(), storage, embedder);
+
+        // File-only send: empty message + the upload's id.
+        let mut stream =
+            schema.execute_stream(subscription_request_with_files(None, "", &[file.id]));
+        while stream.next().await.is_some() {}
+
+        let request = captured.lock().unwrap().clone().unwrap();
+        let messages = request["messages"].as_array().unwrap();
+        let contents: Vec<&str> = messages
+            .iter()
+            .map(|m| m["content"].as_str().unwrap_or_default())
+            .collect();
+
+        // The provider receives the synthesized instruction plus the chat's
+        // opening chunks (no similarity filter); no memories system message.
+        assert_eq!(
+            contents,
+            vec![
+                "Here are some related file chunks: the marble archive opens at dusk only",
+                "Please read the attached file(s) and respond.",
+            ]
+        );
+
+        // The persisted user bubble keeps its empty text; the thread takes
+        // its title from the file.
+        let conn = db.get().unwrap();
+        let (user_content, title): (String, String) = conn
+            .query_row(
+                "SELECT (SELECT content FROM messages WHERE role = 'USER' ORDER BY id DESC LIMIT 1),
+                        (SELECT title FROM conversations ORDER BY id DESC LIMIT 1)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(user_content, "");
+        assert_eq!(title, "archive-notes.md");
+    }
+
+    /// Creates a persisted message owned by a real conversation row (files'
+    /// message_id is FK-checked) and returns its id.
+    fn seed_message(pool: &Db, conversation_id: i64) -> i64 {
+        let conn = pool.get().unwrap();
+        conn.execute(
+            "INSERT INTO conversations (id, title, created_at, updated_at)
+         VALUES (?1, 'chat', '0', '0')
+         ON CONFLICT(id) DO NOTHING",
+            [conversation_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages (conversation_id, role, content, created_at)
+         VALUES (?1, 'USER', 'history', '0')",
+            [conversation_id],
+        )
+        .unwrap();
+        conn.last_insert_rowid()
+    }
+
+    #[tokio::test]
+    async fn relinking_is_idempotent_and_ignores_claimed_files() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = crate::db::init(dir.path()).unwrap();
+        let storage = crate::storage::Storage::memory().unwrap();
+
+        let file =
+            crate::files::store_upload(&db, &storage, b"content".to_vec(), "one.txt", "text/plain")
+                .await
+                .unwrap();
+
+        {
+            let conn = db.get().unwrap();
+            let message_one = seed_message(&db, 1);
+            let message_two = seed_message(&db, 2);
+
+            let first = crate::files::link_to_message(&conn, &[file.id], message_one).unwrap();
+            assert_eq!(first.len(), 1);
+
+            // Same ids again: no-op. Another message can't steal the
+            // attachment (message_id IS NULL guard).
+            let again = crate::files::link_to_message(&conn, &[file.id], message_one).unwrap();
+            assert!(again.is_empty());
+            let stolen = crate::files::link_to_message(&conn, &[file.id], message_two).unwrap();
+            assert!(stolen.is_empty());
+
+            let owner: i64 = conn
+                .query_row(
+                    "SELECT message_id FROM files WHERE id = ?1",
+                    [file.id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(owner, message_one);
+        }
+    }
+
+    #[tokio::test]
+    async fn orphan_gc_removes_uploads_never_attached_to_a_message() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = crate::db::init(dir.path()).unwrap();
+        let storage = crate::storage::Storage::memory().unwrap();
+
+        let orphan = crate::files::store_upload(
+            &db,
+            &storage,
+            b"never sent".to_vec(),
+            "orphan.txt",
+            "text/plain",
+        )
+        .await
+        .unwrap();
+        let attached =
+            crate::files::store_upload(&db, &storage, b"kept".to_vec(), "kept.txt", "text/plain")
+                .await
+                .unwrap();
+        {
+            let message_id = seed_message(&db, 1);
+            let conn = db.get().unwrap();
+            crate::files::link_to_message(&conn, &[attached.id], message_id).unwrap();
+        }
+
+        let removed = crate::files::gc_orphan_uploads(&db, &storage).await;
+        assert_eq!(removed, 1);
+
+        let conn = db.get().unwrap();
+        let remaining: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT file_name FROM files").unwrap();
+            stmt.query_map([], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert_eq!(remaining, vec![attached.file_name.clone()]);
+        assert!(storage.read(&orphan.file_name).await.is_err());
+        assert!(storage.read(&attached.file_name).await.is_ok());
     }
 
     #[tokio::test]

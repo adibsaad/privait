@@ -47,19 +47,29 @@ storage, and schema types carry over; the page goes away).
 ### Data model (migration v3)
 
 ```sql
-ALTER TABLE files ADD COLUMN conversation_id INTEGER NULL
-    REFERENCES conversations(id) ON DELETE CASCADE;
-CREATE INDEX idx_files_conversation ON files(conversation_id);
+ALTER TABLE files ADD COLUMN message_id INTEGER NULL
+    REFERENCES messages(id) ON DELETE CASCADE;
+CREATE INDEX idx_files_message ON files(message_id);
 ```
 
-- `conversation_id IS NULL` until the send's subscription links them;
-  NULL files never ground anything (decision 1) and are garbage-collected
-  on app start (orphan insurance when a send aborts mid-upload).
-- `ON DELETE CASCADE`: deleting a conversation removes its files rows and
-  storage objects stay — storage GC can join a later cleanup pass (M4
-  housekeeping), out of scope here.
+Delivery note: the plan originally proposed `conversation_id`, but chips
+must re-render on the *specific user message* that carried them, so files
+link to their message instead; the per-chat scope is one join away
+(`files → messages → conversations`). Everything else holds:
+
+- `message_id IS NULL` until the send's subscription links them; NULL files
+  never ground anything (decision 1) and are garbage-collected on app start
+  (orphan insurance when a send aborts mid-upload).
+- `ON DELETE CASCADE`: deleting a conversation removes its messages and the
+  files rows cascade through them.
 - Previously uploaded rows keep NULL and simply stop grounding (local dev
   data; the roadmap's fresh-start principle applies).
+
+Retrieval note: sqlite-vec's KNN only optimizes bare queries on the vec0
+table (a JOIN defeats both parameterized and literal LIMITs), so
+`related_file_chunks` runs KNN over all chunks and filters to the
+conversation's file ids app-side — exact (crowding-proof) and cheap at
+desktop scale.
 
 ### GraphQL surface (minimal deltas)
 

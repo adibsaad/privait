@@ -22,10 +22,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let db = privait_lib::db::init(&data_dir)?;
     let embedder = privait_lib::embeddings::FastEmbedder::new(data_dir.join("models"));
 
+    // File chunks are scoped per-chat now; default to the newest conversation
+    // (mirrors what the chat just grounded against).
+    let conversation_id: i64 = std::env::args()
+        .nth(1)
+        .and_then(|arg| arg.parse().ok())
+        .unwrap_or(0);
+    let conversation_id = if conversation_id > 0 {
+        conversation_id
+    } else {
+        let conn = db.get()?;
+        conn.query_row(
+            "SELECT COALESCE(MAX(id), 0) FROM conversations",
+            [],
+            |row| row.get(0),
+        )?
+    };
+
     let started = std::time::Instant::now();
     let query_embedding = embedder.embed(&query).await?;
     println!(
-        "query embedded in {:.1?} (dim {})",
+        "query embedded in {:.1?} (dim {}); scoping file chunks to conversation {conversation_id}",
         started.elapsed(),
         query_embedding.len()
     );
@@ -33,6 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let input = privait_lib::retrieval::RetrievalInput {
         db: &db,
         query_embedding: &query_embedding,
+        conversation_id,
     };
 
     let chunks = privait_lib::retrieval::related_file_chunks(&input).map_err(|e| e.to_string())?;

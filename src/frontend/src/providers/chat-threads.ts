@@ -1,4 +1,4 @@
-import { ThreadMessageLike } from '@assistant-ui/react'
+import { CompleteAttachment, ThreadMessageLike } from '@assistant-ui/react'
 
 import { EMPTY_THREAD_ID } from '@frontend/config/consts'
 import type { Thread } from '@frontend/context/thread'
@@ -9,8 +9,52 @@ export const TEMP_USER_ID = 'temp-user'
 
 export type ThreadsMap = Map<string, ThreadMessageLike[]>
 
-export function userMessage(id: string, text: string): ThreadMessageLike {
-  return { id, role: 'user', content: text }
+/** File chip data carried on user messages (preview before the backend's
+ * persisted `Message.files` loads). */
+export type UserAttachment = { id: string; name: string }
+
+/** CompleteAttachment-shaped chip for ThreadMessageLike (name-only display;
+ * the bytes never ride through the message store — only through uploads). */
+export function userAttachment(attachment: UserAttachment): CompleteAttachment {
+  return {
+    id: attachment.id,
+    type: 'document',
+    name: attachment.name,
+    contentType: attachmentNameContentType(attachment.name),
+    status: { type: 'complete' },
+    content: [],
+  }
+}
+
+function attachmentNameContentType(name: string): string {
+  const extension = name.split('.').pop()?.toLowerCase() ?? ''
+  switch (extension) {
+    case 'pdf':
+      return 'application/pdf'
+    case 'csv':
+      return 'text/csv'
+    case 'html':
+      return 'text/html'
+    case 'md':
+      return 'text/markdown'
+    default:
+      return 'text/plain'
+  }
+}
+
+export function userMessage(
+  id: string,
+  text: string,
+  attachments?: UserAttachment[],
+): ThreadMessageLike {
+  return {
+    id,
+    role: 'user',
+    content: text,
+    ...(attachments?.length
+      ? { attachments: attachments.map(userAttachment) }
+      : {}),
+  }
 }
 
 export function assistantChunkMessage(
@@ -40,6 +84,7 @@ export function withOptimisticUserMessage(
   threads: ThreadsMap,
   threadId: string,
   text: string,
+  attachments: UserAttachment[] = [],
 ): ThreadsMap {
   const existing = threads.get(threadId) ?? []
   if (existing.some(m => m.id === TEMP_USER_ID)) {
@@ -48,7 +93,7 @@ export function withOptimisticUserMessage(
 
   return new Map(threads).set(threadId, [
     ...existing,
-    userMessage(TEMP_USER_ID, text),
+    userMessage(TEMP_USER_ID, text, attachments),
   ])
 }
 

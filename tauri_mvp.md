@@ -118,6 +118,14 @@ Errors: keep the `Error { message }` / `XSuccess` union pattern.
 - [x] Retrieval: cosine top-4 memories + top-4 chunks (≥0.5) injected as system context in the chat pipeline
 - [x] Files page parity: status UPLOADED→PROCESSED, delete removes file + chunks
 
+### M3 rework — files move into chat (user decision, see file_arch.md) ✅
+- [x] Files page removed (UI only; `files`/`deleteFileUpload` stay in the schema, unused)
+- [x] Composer attachments: paperclip + chips (assistant-ui attachment adapter), send enabled for text or files; multi-file
+- [x] On-send uploads → subscription `fileIds`; uploads processed inline (the apalis worker is out of the upload path; kept for Reflect-phase cron)
+- [x] Per-chat grounding: files link to their user message (migration v3 `files.message_id`); retrieval KNNs all chunks and filters to the conversation app-side (sqlite-vec KNN can't JOIN)
+- [x] Empty-message auto-instruct ("Please read the attached file(s) and respond."); file-only first message titles the thread from the file
+- [x] Startup orphan GC (stored-but-never-attached uploads); `Message.files` re-renders chips after reload
+
 ### M4 — Ship the shell
 - [ ] Schema parity check: introspected async-graphql schema diffs clean against old `schema.graphql` (minus auth)
 - [ ] Settings UI (provider base URL / API key / model) — shipped in M2; provider smoke-tested against OpenRouter and a local ollama still pending here

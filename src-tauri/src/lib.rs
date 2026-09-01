@@ -51,6 +51,16 @@ pub fn run() {
             let embedder: std::sync::Arc<dyn embeddings::Embedder> =
                 std::sync::Arc::new(embeddings::FastEmbedder::new(data_dir.join("models")));
 
+            // Uploads happen on send; anything stored but never attached to a
+            // message is a dead end (aborted send) — sweep it at startup.
+            {
+                let db = db.clone();
+                let storage = storage.clone();
+                tauri::async_runtime::spawn(async move {
+                    files::gc_orphan_uploads(&db, &storage).await;
+                });
+            }
+
             let worker_jobs = jobs.clone();
             tauri::async_runtime::spawn(jobs::run_worker(
                 worker_jobs,
@@ -72,7 +82,6 @@ pub fn run() {
                 schema::SchemaContext {
                     db,
                     storage: Some(storage),
-                    jobs: Some(jobs.clone()),
                     embedder,
                 },
                 schema::FirstChunkTimeout::default().0,

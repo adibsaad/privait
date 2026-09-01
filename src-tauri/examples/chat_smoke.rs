@@ -17,7 +17,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         });
 
     let db = privait_lib::db::init(&data_dir)?;
-    let jobs = privait_lib::jobs::Jobs::init(&data_dir.join("jobs.db")).await?;
+    let _jobs = privait_lib::jobs::Jobs::init(&data_dir.join("jobs.db")).await?;
     let file_storage =
         std::sync::Arc::new(privait_lib::storage::Storage::fs(&data_dir.join("files"))?);
     let embedder: std::sync::Arc<dyn privait_lib::embeddings::Embedder> = std::sync::Arc::new(
@@ -55,7 +55,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         privait_lib::schema::SchemaContext {
             db: db.clone(),
             storage: Some(file_storage),
-            jobs: Some(jobs),
             embedder,
         },
         privait_lib::schema::FirstChunkTimeout::default().0,

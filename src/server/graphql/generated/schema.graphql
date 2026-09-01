@@ -55,6 +55,11 @@ input FileUploadInput {
 
 type Message {
   content: String!
+  """
+  Attachments carried by this message — lets chat history re-render
+  the file chips after a reload.
+  """
+  files: [FileUpload!]!
   id: ID!
   role: MessageRole!
 }
@@ -74,8 +79,11 @@ type Mutation {
   saveSettings(input: SettingsInput!): MutationSaveSettingsResult!
   """
   Persists a validated upload (5MB cap, MIME allowlist) to storage and
-  the `files` table, then enqueues the process-file job. The row is
-  returned with status UPLOADED; the worker flips it to PROCESSED.
+  the `files` table, then runs the extract → chunk → embed pipeline
+  inline and returns the PROCESSED row. Upload happens on send, so the
+  user is waiting on the result — background processing (the apalis
+  worker) is no longer in this path. On pipeline failure the upload is
+  rolled back so nothing lingers unprocessed.
   """
   uploadFile(input: FileUploadInput!): MutationUploadFileResult!
 }
@@ -148,11 +156,17 @@ type Subscription {
   conversation; the new user message and an empty assistant message are
   persisted up front, then provider chunks stream over this subscription.
   
+  `fileIds` are uploads sent with this turn (the composer uploads them
+  right before subscribing). They are attached to the user message here;
+  file chunks from this conversation ground the turn. `message` may be
+  empty when files are attached — the model then receives a synthesized
+  instruction while the bubble keeps just the chips.
+  
   Kill switch: dropping the subscription (stop button / disconnect)
   drops the receiver below; the pump task notices the failed send,
   aborts the provider request, and persists the partial reply.
   """
-  conversation(conversationId: Int, message: String!): SubscriptionConversationResult!
+  conversation(conversationId: Int, fileIds: [Int!], message: String!): SubscriptionConversationResult!
 }
 
 union SubscriptionConversationResult = Error | SubscriptionConversationSuccess

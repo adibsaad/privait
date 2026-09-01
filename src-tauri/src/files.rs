@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::db::Db;
+use crate::chunker::{self, ChunkOptions};
+use crate::db::{self, Db};
+use crate::embeddings::Embedder;
 use crate::storage::Storage;
 
 pub const MAX_FILE_SIZE: usize = 5 * 1024 * 1024; // 5MB
@@ -158,16 +160,140 @@ pub async fn delete_upload(db: &Db, storage: &Storage, file_id: i64) -> Result<F
     Ok(row)
 }
 
-fn now_iso() -> String {
-    chrono::Utc::now().to_rfc3339()
-}
-
-/// Shared pipeline deps: which database, storage, and embedder the worker
-/// (and resolvers) use. Cloneable; held as schema data.
+/// Everything the extraction/embedding pipeline needs (kept queue-agnostic:
+/// the chat-composer path runs it inline; the apalis worker reuses it).
 #[derive(Clone)]
-pub struct UploadContext {
+pub struct PipelineDeps {
     pub db: Db,
     pub storage: Arc<Storage>,
+    pub embedder: Arc<dyn Embedder>,
+}
+
+/// Extracts text, chunks it (cl100k_base, 512/64 — the ported chunker),
+/// embeds each chunk, and stores the vectors, then flips the row to
+/// PROCESSED. Mirrors `src/server/jobs/process-file.ts` step for step.
+pub async fn process_uploaded_file(deps: &PipelineDeps, file_id: i64) -> Result<(), String> {
+    let row: FileRow = {
+        let conn = deps.db.get().map_err(|err| err.to_string())?;
+        get_file(&conn, file_id)
+            .map_err(|err| err.to_string())?
+            .ok_or_else(|| "File not found".to_string())?
+    };
+
+    let bytes = deps
+        .storage
+        .read(&row.file_name)
+        .await
+        .map_err(|err| err.to_string())?;
+
+    let text = extract_text(&bytes, &row.kind)?;
+
+    let conn = deps.db.get().map_err(|err| err.to_string())?;
+    let chunks =
+        chunker::stream_chunks(&text, ChunkOptions::default()).map_err(|err| err.to_string())?;
+
+    let mut count = 0usize;
+    for chunk in chunks {
+        let embedding = deps
+            .embedder
+            .embed(&chunk.text)
+            .await
+            .map_err(|err| err.to_string())?;
+        conn.execute(
+            "INSERT INTO file_chunks (embedding, content, file_id) VALUES (?1, ?2, ?3)",
+            rusqlite::params![db::embedding_to_blob(&embedding), chunk.text, file_id],
+        )
+        .map_err(|err| err.to_string())?;
+        count += 1;
+    }
+    drop(conn);
+
+    let conn = deps.db.get().map_err(|err| err.to_string())?;
+    conn.execute(
+        "UPDATE files SET status = 'PROCESSED', processed_at = ?1 WHERE id = ?2",
+        rusqlite::params![now_iso(), file_id],
+    )
+    .map_err(|err| err.to_string())?;
+
+    println!("Processed {count} chunks for file {file_id}");
+    Ok(())
+}
+
+/// PDF → pdf-extract, TEXT → utf-8 (lossy, as `Buffer.toString('utf-8')`).
+fn extract_text(bytes: &[u8], kind: &str) -> Result<String, String> {
+    match kind {
+        "PDF" => pdf_extract::extract_text_from_mem(bytes).map_err(|err| err.to_string()),
+        "TEXT" => Ok(String::from_utf8_lossy(bytes).into_owned()),
+        other => Err(format!("unsupported file kind: {other}")),
+    }
+}
+
+/// Attaches uploads to the user message that carries them. Idempotent:
+/// already-claimed files are left alone, so a lying client can't re-home
+/// another message's attachment. Returns the newly linked rows in the order
+/// requested.
+pub fn link_to_message(
+    conn: &Connection,
+    file_ids: &[i64],
+    message_id: i64,
+) -> rusqlite::Result<Vec<FileRow>> {
+    let mut linked = Vec::with_capacity(file_ids.len());
+    for file_id in file_ids {
+        conn.execute(
+            "UPDATE files SET message_id = ?1 WHERE id = ?2 AND message_id IS NULL",
+            rusqlite::params![message_id, file_id],
+        )?;
+        if conn.changes() > 0 {
+            linked.push(get_file(conn, *file_id)?.expect("just linked"));
+        }
+    }
+    Ok(linked)
+}
+
+/// Files belonging to a message (for chat-history chip rendering).
+pub fn files_for_message(conn: &Connection, message_id: i64) -> rusqlite::Result<Vec<FileRow>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {FILE_COLUMNS} FROM files WHERE message_id = ?1 ORDER BY id ASC"
+    ))?;
+    let rows = stmt
+        .query_map([message_id], row_from)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// Removes uploads that were stored but never attached to a message (a send
+/// that failed between upload and subscribe). Runs at startup.
+pub async fn gc_orphan_uploads(db: &Db, storage: &Storage) -> usize {
+    let conn = match db.get() {
+        Ok(conn) => conn,
+        Err(_) => return 0,
+    };
+    let orphans: Vec<(i64, String)> = match conn
+        .prepare("SELECT id, file_name FROM files WHERE message_id IS NULL")
+        .and_then(|mut stmt| {
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .and_then(|rows| rows.collect())
+        }) {
+        Ok(rows) => rows,
+        Err(_) => return 0,
+    };
+
+    let mut removed = 0;
+    for (id, file_name) in orphans {
+        if storage.delete(&file_name).await.is_ok() {
+            removed += 1;
+        }
+        let _ = conn.execute("DELETE FROM file_chunks WHERE file_id = ?1", [id]);
+        let _ = conn.execute("DELETE FROM files WHERE id = ?1", [id]);
+    }
+    if removed > 0 {
+        println!("Cleaned up {removed} unattached upload(s)");
+    }
+    removed
+}
+
+fn now_iso() -> String {
+    chrono::Utc::now().to_rfc3339()
 }
 
 #[cfg(test)]

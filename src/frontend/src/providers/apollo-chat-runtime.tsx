@@ -8,6 +8,9 @@ import {
   useSubscription,
 } from '@apollo/client/react'
 import {
+  AttachmentAdapter,
+  CompleteAttachment,
+  PendingAttachment,
   ThreadMessageLike,
   AssistantRuntimeProvider,
   useExternalStoreRuntime,
@@ -23,6 +26,7 @@ import {
   DeleteConversationDocument,
   GetConversationDocument,
   RenameConversationDocument,
+  UploadFileDocument,
 } from '@frontend/graphql/output/graphql'
 import {
   appendAssistantChunk,
@@ -32,11 +36,20 @@ import {
   userMessage,
   withOptimisticThread,
   withOptimisticUserMessage,
+  UserAttachment,
 } from '@frontend/providers/chat-threads'
 
 gql(/* GraphQL */ `
-  subscription ConversationSub($conversationId: Int, $message: String!) {
-    conversation(conversationId: $conversationId, message: $message) {
+  subscription ConversationSub(
+    $conversationId: Int
+    $message: String!
+    $fileIds: [Int!]
+  ) {
+    conversation(
+      conversationId: $conversationId
+      message: $message
+      fileIds: $fileIds
+    ) {
       __typename
 
       ... on SubscriptionConversationSuccess {
@@ -51,6 +64,26 @@ gql(/* GraphQL */ `
 
       ... on Error {
         message
+      }
+    }
+  }
+
+  # Operation name must stay lowercase: apollo-client.ts routes uploads to
+  # the multipart link by the operation name uploadFile.
+  mutation uploadFile($file: Upload!) {
+    uploadFile(input: { file: $file }) {
+      __typename
+
+      ... on Error {
+        message
+      }
+
+      ... on MutationUploadFileSuccess {
+        data {
+          id
+          originalName
+          status
+        }
       }
     }
   }
@@ -93,25 +126,89 @@ gql(/* GraphQL */ `
   }
 `)
 
+/** Same allowlist the backend enforces (files.rs). */
+const ATTACHMENT_ACCEPT =
+  '.pdf,.txt,.md,.csv,.html,application/pdf,text/plain,text/markdown,text/csv,text/html'
+
+type PendingUpload = { attachmentId: string; file: File }
+
+function useComposerAttachmentAdapter() {
+  // Files picked but not yet sent. The adapter hands assistant-ui the tile;
+  // the map hands the uploader the bytes.
+  const filesRef = useRef(new Map<string, File>())
+
+  const adapter: AttachmentAdapter = {
+    accept: ATTACHMENT_ACCEPT,
+
+    add: async ({ file }: { file: File }): Promise<PendingAttachment> => {
+      const id = `pending-${crypto.randomUUID()}`
+      filesRef.current.set(id, file)
+      return {
+        id,
+        type: 'document',
+        name: file.name,
+        contentType: file.type || 'application/octet-stream',
+        file,
+        status: { type: 'requires-action', reason: 'composer-send' },
+      }
+    },
+
+    remove: async (attachment: { id: string }) => {
+      filesRef.current.delete(attachment.id)
+    },
+
+    send: async (
+      attachment: PendingAttachment,
+    ): Promise<CompleteAttachment> => {
+      return {
+        id: attachment.id,
+        type: 'document',
+        name: attachment.name,
+        contentType: attachment.contentType,
+        status: { type: 'complete' },
+        content: [],
+      }
+    },
+  }
+
+  /** Takes (and forgets) the files for a send; a retry after a failed
+   * upload would need re-picking, matching the abort-abort-simple send UX. */
+  const takeFiles = (): PendingUpload[] => {
+    const pending = [...filesRef.current.entries()].map(
+      ([attachmentId, file]) => ({ attachmentId, file }),
+    )
+    filesRef.current.clear()
+    return pending
+  }
+
+  return { adapter, takeFiles }
+}
+
 export function ApolloChatRuntimeProvider({
   children,
 }: {
   children: React.ReactNode
 }) {
   const gotFirstChunkRef = useRef(false)
+  // Attachments of the in-flight send, carried onto the persisted user
+  // message when the first chunk swaps the optimistic bubble.
+  const pendingAttachmentsRef = useRef<UserAttachment[]>([])
   // Selecting a thread (from the sidebar, on any route) must land the user
   // on the chat page.
   const navigate = useNavigate()
   const [nextMessage, nextMessageSet] = useState<{
     msg: string
     conversationId: number | null
-  }>({ msg: '', conversationId: null })
+    fileIds: number[] | null
+  }>({ msg: '', conversationId: null, fileIds: null })
   const [skipSub, skipSubSet] = useState(true)
   const [isRunning, isRunningSet] = useState(false)
   const [deleteConversationMut] = useMutation(DeleteConversationDocument)
   const [renameConversationMut] = useMutation(RenameConversationDocument)
   const [archiveConversationMut] = useMutation(ArchiveConversationDocument)
+  const [uploadFileMut] = useMutation(UploadFileDocument)
   const [loadConversation] = useLazyQuery(GetConversationDocument)
+  const { adapter, takeFiles } = useComposerAttachmentAdapter()
 
   // threads
   const {
@@ -225,6 +322,7 @@ export function ApolloChatRuntimeProvider({
     variables: {
       conversationId: nextMessage.conversationId,
       message: nextMessage.msg,
+      fileIds: nextMessage.fileIds,
     },
     onData: newMessage => {
       if (newMessage.data.data?.conversation?.__typename === 'Error') {
@@ -262,7 +360,11 @@ export function ApolloChatRuntimeProvider({
             reconcileFirstChunk(
               prev,
               threadId,
-              userMessage(previousMessageId, nextMessage.msg),
+              userMessage(
+                previousMessageId,
+                nextMessage.msg,
+                pendingAttachmentsRef.current,
+              ),
             ),
           )
 
@@ -289,6 +391,9 @@ export function ApolloChatRuntimeProvider({
               ),
             )
           })
+
+          // Chips are re-rendered from the persisted message from here on.
+          pendingAttachmentsRef.current = []
         }
 
         setThreads(prev =>
@@ -302,29 +407,75 @@ export function ApolloChatRuntimeProvider({
   })
 
   const onNew = async (message: ThreadMessageLike) => {
-    const content = message.content[0]
-    if (content && typeof content !== 'string') {
-      if (content.type === 'text') {
-        // Optimistically show the user's message right away; the persisted
-        // id arrives with the first streamed chunk and replaces it.
-        setThreads(prev =>
-          withOptimisticUserMessage(prev, currentThreadId, content.text),
-        )
-        // Brand-new chats also appear in the sidebar immediately, selected
-        // with a fallback title, and get their real id on the first chunk.
-        if (currentThreadId === EMPTY_THREAD_ID) {
-          setThreadList(prev => withOptimisticThread(prev))
-        }
+    const firstPart = message.content[0]
+    const text =
+      typeof firstPart === 'string'
+        ? firstPart
+        : firstPart !== undefined &&
+            !Array.isArray(firstPart) &&
+            typeof firstPart === 'object' &&
+            (firstPart as { type?: unknown }).type === 'text'
+          ? String((firstPart as { text?: unknown }).text ?? '')
+          : ''
 
-        nextMessageSet({
-          msg: content.text,
-          conversationId: Number(currentThreadId),
-        })
-        gotFirstChunkRef.current = false
-        skipSubSet(false)
-        isRunningSet(true)
+    // Files ride on the outgoing message via the attachment adapter; send
+    // them first, then open the streaming subscription with their ids. The
+    // backend processes uploads inline, so nothing needs polling here.
+    let fileIds: number[] | null = null
+    if ((message.attachments?.length ?? 0) > 0) {
+      const pending = takeFiles()
+      const failed: string[] = []
+      const ids = await Promise.all(
+        pending.map(async ({ file }) => {
+          const result = await uploadFileMut({
+            variables: { file },
+            errorPolicy: 'all',
+          })
+          const payload = result.data?.uploadFile
+          if (payload?.__typename === 'MutationUploadFileSuccess') {
+            return Number(payload.data.id)
+          }
+          const reason =
+            payload?.__typename === 'Error' ? payload.message : 'upload failed'
+          failed.push(`${file.name}: ${reason}`)
+          return null
+        }),
+      )
+      const ok = ids.filter((id): id is number => id !== null)
+      if (ok.length > 0) {
+        fileIds = ok
+      }
+      if (failed.length > 0) {
+        toast.error(`Upload failed — ${failed.join('; ')}`)
+        // Files that made it to the server but not into a message are
+        // garbage-collected on the next app launch.
+        return
       }
     }
+
+    // Optimistically show the user's message (with chip previews) right
+    // away; the persisted id arrives with the first streamed chunk.
+    const attachments: UserAttachment[] = (message.attachments ?? []).map(
+      a => ({ id: a.id, name: a.name }),
+    )
+    pendingAttachmentsRef.current = attachments
+    setThreads(prev =>
+      withOptimisticUserMessage(prev, currentThreadId, text, attachments),
+    )
+    // Brand-new chats also appear in the sidebar immediately, selected
+    // with a fallback title, and get their real id on the first chunk.
+    if (currentThreadId === EMPTY_THREAD_ID) {
+      setThreadList(prev => withOptimisticThread(prev))
+    }
+
+    nextMessageSet({
+      msg: text,
+      conversationId: Number(currentThreadId),
+      fileIds,
+    })
+    gotFirstChunkRef.current = false
+    skipSubSet(false)
+    isRunningSet(true)
   }
 
   // Stop button: unsubscribe; the backend drops the stream on `complete`
@@ -348,6 +499,7 @@ export function ApolloChatRuntimeProvider({
     },
     adapters: {
       threadList: threadListAdapter,
+      attachments: adapter,
     },
   })
 
