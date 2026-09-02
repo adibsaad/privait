@@ -11,6 +11,10 @@ import {
   AllConversationsDocument,
   MessageRole,
 } from '@frontend/graphql/output/graphql'
+import {
+  pickInitialThreadId,
+  userAttachment,
+} from '@frontend/providers/chat-threads'
 
 gql(/* GraphQL */ `
   query allConversations {
@@ -24,6 +28,10 @@ gql(/* GraphQL */ `
         id
         content
         role
+        files {
+          id
+          originalName
+        }
       }
     }
   }
@@ -36,6 +44,10 @@ gql(/* GraphQL */ `
         id
         content
         role
+        files {
+          id
+          originalName
+        }
       }
     }
   }
@@ -45,6 +57,37 @@ const graphqlRoleToAuiRole: Record<MessageRole, ThreadMessageLike['role']> = {
   ASSISTANT: 'assistant',
   SYSTEM: 'system',
   USER: 'user',
+}
+
+function toAuiMessage(m: {
+  id: string
+  content: string
+  role: MessageRole
+}): ThreadMessageLike {
+  return {
+    id: m.id,
+    content: m.content,
+    role: graphqlRoleToAuiRole[m.role],
+  }
+}
+
+function toAuiMessageWithFiles(m: {
+  id: string
+  content: string
+  role: MessageRole
+}): ThreadMessageLike {
+  const message = toAuiMessage(m)
+  const files = (m as { files?: Array<{ id: string; originalName: string }> })
+    .files
+  if (files?.length) {
+    return {
+      ...message,
+      attachments: files.map(f =>
+        userAttachment({ id: f.id, name: f.originalName }),
+      ),
+    }
+  }
+  return message
 }
 
 export function ThreadProvider({ children }: { children: ReactNode }) {
@@ -68,11 +111,7 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
     data.conversations.map(c => {
       tmpThreads.set(
         c.id,
-        c.messages.map(m => ({
-          id: m.id,
-          content: m.content,
-          role: graphqlRoleToAuiRole[m.role],
-        })),
+        c.messages.map(m => toAuiMessageWithFiles(m)),
       )
     })
 
@@ -95,7 +134,9 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
           title: c.title,
         })),
     )
-    setCurrentThreadId(data.conversations[0].id)
+    // Never restore the app into an archived chat: pick the first live one,
+    // or start on the new-chat page.
+    setCurrentThreadId(pickInitialThreadId(data.conversations))
   }, [loading, data])
 
   if (loading) {

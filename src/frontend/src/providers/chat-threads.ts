@@ -1,4 +1,4 @@
-import { ThreadMessageLike } from '@assistant-ui/react'
+import { CompleteAttachment, ThreadMessageLike } from '@assistant-ui/react'
 
 import { EMPTY_THREAD_ID } from '@frontend/config/consts'
 import type { Thread } from '@frontend/context/thread'
@@ -9,8 +9,52 @@ export const TEMP_USER_ID = 'temp-user'
 
 export type ThreadsMap = Map<string, ThreadMessageLike[]>
 
-export function userMessage(id: string, text: string): ThreadMessageLike {
-  return { id, role: 'user', content: text }
+/** File chip data carried on user messages (preview before the backend's
+ * persisted `Message.files` loads). */
+export type UserAttachment = { id: string; name: string }
+
+/** CompleteAttachment-shaped chip for ThreadMessageLike (name-only display;
+ * the bytes never ride through the message store — only through uploads). */
+export function userAttachment(attachment: UserAttachment): CompleteAttachment {
+  return {
+    id: attachment.id,
+    type: 'document',
+    name: attachment.name,
+    contentType: attachmentNameContentType(attachment.name),
+    status: { type: 'complete' },
+    content: [],
+  }
+}
+
+function attachmentNameContentType(name: string): string {
+  const extension = name.split('.').pop()?.toLowerCase() ?? ''
+  switch (extension) {
+    case 'pdf':
+      return 'application/pdf'
+    case 'csv':
+      return 'text/csv'
+    case 'html':
+      return 'text/html'
+    case 'md':
+      return 'text/markdown'
+    default:
+      return 'text/plain'
+  }
+}
+
+export function userMessage(
+  id: string,
+  text: string,
+  attachments?: UserAttachment[],
+): ThreadMessageLike {
+  return {
+    id,
+    role: 'user',
+    content: text,
+    ...(attachments?.length
+      ? { attachments: attachments.map(userAttachment) }
+      : {}),
+  }
 }
 
 export function assistantChunkMessage(
@@ -40,6 +84,7 @@ export function withOptimisticUserMessage(
   threads: ThreadsMap,
   threadId: string,
   text: string,
+  attachments: UserAttachment[] = [],
 ): ThreadsMap {
   const existing = threads.get(threadId) ?? []
   if (existing.some(m => m.id === TEMP_USER_ID)) {
@@ -48,7 +93,7 @@ export function withOptimisticUserMessage(
 
   return new Map(threads).set(threadId, [
     ...existing,
-    userMessage(TEMP_USER_ID, text),
+    userMessage(TEMP_USER_ID, text, attachments),
   ])
 }
 
@@ -151,4 +196,52 @@ export function reconcileThreadList(
     return withoutPending
   }
   return [{ id: threadId, status: 'regular', title: '' }, ...withoutPending]
+}
+
+/** Minimal shape of a cached conversation row (apollo AllConversations). */
+export type CachedConversation = {
+  id: string
+  archived: boolean
+  title: string
+}
+
+/**
+ * Boot selection: never restore the app into an archived chat — pick the
+ * first live conversation, or start on the new-chat page.
+ */
+export function pickInitialThreadId(
+  conversations: ReadonlyArray<{ id: string; archived: boolean }>,
+): string {
+  return conversations.find(c => !c.archived)?.id ?? EMPTY_THREAD_ID
+}
+
+/** Minimal update surface for a cached conversation (apollo AllConversations). */
+export type ConversationCacheUpdate =
+  | Partial<Pick<CachedConversation, 'archived' | 'title'>>
+  | 'remove'
+
+/**
+ * Builds the AllConversations payload after a sidebar-side update (archive,
+ * unarchive, rename, delete). The archive mutation only returns a Boolean,
+ * so this recovered payload is what keeps other cache consumers — settings'
+ * archived list, titles — instantly accurate. Untouched rows keep their
+ * reference so memoization survives. Generic over the row shape: callers
+ * pass the full cached conversation (with messages), tests can pass stubs.
+ */
+export function applyConversationCacheUpdate<
+  T extends { id: string; archived: boolean; title: string },
+>(
+  conversations: readonly T[],
+  conversationId: string,
+  update: ConversationCacheUpdate,
+): T[] {
+  return conversations.flatMap(conversation => {
+    if (conversation.id !== conversationId) {
+      return [conversation]
+    }
+    if (update === 'remove') {
+      return []
+    }
+    return [{ ...conversation, ...update }]
+  })
 }

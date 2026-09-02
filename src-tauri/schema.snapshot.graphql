@@ -21,10 +21,41 @@ type Error {
 	message: String!
 }
 
+enum FileStatus {
+	UPLOADED
+	PROCESSED
+}
+
+enum FileType {
+	PDF
+	TEXT
+}
+
+type FileUpload {
+	id: ID!
+	originalName: String!
+	type: FileType!
+	status: FileStatus!
+	createdAt: String!
+}
+
+"""
+`input: FileUploadInput!` — kept for the old schema's shape even though it
+only carries the upload.
+"""
+input FileUploadInput {
+	file: Upload!
+}
+
 type Message {
 	id: ID!
 	role: MessageRole!
 	content: String!
+	"""
+	Attachments carried by this message — lets chat history re-render
+	the file chips after a reload.
+	"""
+	files: [FileUpload!]!
 }
 
 enum MessageRole {
@@ -38,6 +69,19 @@ type Mutation {
 	renameConversation(conversationId: Int!, title: String!): MutationRenameConversationResult!
 	archiveConversation(conversationId: Int!, archived: Boolean!): MutationArchiveConversationResult!
 	saveSettings(input: SettingsInput!): MutationSaveSettingsResult!
+	"""
+	Persists a validated upload (5MB cap, MIME allowlist) to storage and
+	the `files` table, then runs the extract → chunk → embed pipeline
+	inline and returns the PROCESSED row. Upload happens on send, so the
+	user is waiting on the result — background processing (the apalis
+	worker) is no longer in this path. On pipeline failure the upload is
+	rolled back so nothing lingers unprocessed.
+	"""
+	uploadFile(input: FileUploadInput!): MutationUploadFileResult!
+	"""
+	Removes the upload, its stored bytes, and its vector chunks.
+	"""
+	deleteFileUpload(fileId: Int!): MutationDeleteFileUploadResult!
 }
 
 union MutationArchiveConversationResult = Error | MutationArchiveConversationSuccess
@@ -49,6 +93,12 @@ type MutationArchiveConversationSuccess {
 union MutationDeleteConversationResult = Error | MutationDeleteConversationSuccess
 
 type MutationDeleteConversationSuccess {
+	data: Boolean!
+}
+
+union MutationDeleteFileUploadResult = Error | MutationDeleteFileUploadSuccess
+
+type MutationDeleteFileUploadSuccess {
 	data: Boolean!
 }
 
@@ -64,6 +114,12 @@ type MutationSaveSettingsSuccess {
 	data: Settings!
 }
 
+union MutationUploadFileResult = Error | MutationUploadFileSuccess
+
+type MutationUploadFileSuccess {
+	data: FileUpload!
+}
+
 type Query {
 	"""
 	Liveness check for the in-process API server.
@@ -76,6 +132,10 @@ type Query {
 	conversations: [Conversation!]!
 	conversation(conversationId: Int!): Conversation
 	settings: Settings!
+	"""
+	All uploaded files, oldest first (matches the old resolver's ordering).
+	"""
+	files: [FileUpload!]!
 }
 
 type Settings {
@@ -96,11 +156,17 @@ type Subscription {
 	conversation; the new user message and an empty assistant message are
 	persisted up front, then provider chunks stream over this subscription.
 	
+	`fileIds` are uploads sent with this turn (the composer uploads them
+	right before subscribing). They are attached to the user message here;
+	file chunks from this conversation ground the turn. `message` may be
+	empty when files are attached — the model then receives a synthesized
+	instruction while the bubble keeps just the chips.
+	
 	Kill switch: dropping the subscription (stop button / disconnect)
 	drops the receiver below; the pump task notices the failed send,
 	aborts the provider request, and persists the partial reply.
 	"""
-	conversation(conversationId: Int, message: String!): SubscriptionConversationResult!
+	conversation(conversationId: Int, message: String!, fileIds: [Int!]): SubscriptionConversationResult!
 }
 
 union SubscriptionConversationResult = Error | SubscriptionConversationSuccess
@@ -108,6 +174,11 @@ union SubscriptionConversationResult = Error | SubscriptionConversationSuccess
 type SubscriptionConversationSuccess {
 	data: ConversationMessageChunk!
 }
+
+"""
+A multipart file upload
+"""
+scalar Upload
 
 """
 The single local user; no auth machinery exists in the desktop app.
@@ -128,6 +199,10 @@ directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
 Directs the executor to skip this field or fragment when the `if` argument is true.
 """
 directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+"""
+Provides a scalar specification URL for specifying the behavior of custom scalar types.
+"""
+directive @specifiedBy(url: String!) on SCALAR
 schema {
 	query: Query
 	mutation: Mutation

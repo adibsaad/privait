@@ -1,3 +1,5 @@
+AGENTS.local.md
+
 node_modules
 # Keep environment variables out of version control
 .env
@@ -26,3 +28,6 @@ src/frontend/vite.config.mjs
 src/frontend/src/**/*.js
 src/server/**/*.js
 /codegen.js
+
+sample-files/
+.DS_Store

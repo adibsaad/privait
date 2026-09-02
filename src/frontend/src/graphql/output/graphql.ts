@@ -27,6 +27,8 @@ export type Scalars = {
   Boolean: { input: boolean; output: boolean }
   Int: { input: number; output: number }
   Float: { input: number; output: number }
+  /** A multipart file upload */
+  Upload: { input: any; output: any }
 }
 
 export type Conversation = {
@@ -55,9 +57,41 @@ export type Error = {
   message: Scalars['String']['output']
 }
 
+export enum FileStatus {
+  Processed = 'PROCESSED',
+  Uploaded = 'UPLOADED',
+}
+
+export enum FileType {
+  Pdf = 'PDF',
+  Text = 'TEXT',
+}
+
+export type FileUpload = {
+  __typename?: 'FileUpload'
+  createdAt: Scalars['String']['output']
+  id: Scalars['ID']['output']
+  originalName: Scalars['String']['output']
+  status: FileStatus
+  type: FileType
+}
+
+/**
+ * `input: FileUploadInput!` — kept for the old schema's shape even though it
+ * only carries the upload.
+ */
+export type FileUploadInput = {
+  file: Scalars['Upload']['input']
+}
+
 export type Message = {
   __typename?: 'Message'
   content: Scalars['String']['output']
+  /**
+   * Attachments carried by this message — lets chat history re-render
+   * the file chips after a reload.
+   */
+  files: Array<FileUpload>
   id: Scalars['ID']['output']
   role: MessageRole
 }
@@ -72,8 +106,19 @@ export type Mutation = {
   __typename?: 'Mutation'
   archiveConversation: MutationArchiveConversationResult
   deleteConversation: MutationDeleteConversationResult
+  /** Removes the upload, its stored bytes, and its vector chunks. */
+  deleteFileUpload: MutationDeleteFileUploadResult
   renameConversation: MutationRenameConversationResult
   saveSettings: MutationSaveSettingsResult
+  /**
+   * Persists a validated upload (5MB cap, MIME allowlist) to storage and
+   * the `files` table, then runs the extract → chunk → embed pipeline
+   * inline and returns the PROCESSED row. Upload happens on send, so the
+   * user is waiting on the result — background processing (the apalis
+   * worker) is no longer in this path. On pipeline failure the upload is
+   * rolled back so nothing lingers unprocessed.
+   */
+  uploadFile: MutationUploadFileResult
 }
 
 export type MutationArchiveConversationArgs = {
@@ -85,6 +130,10 @@ export type MutationDeleteConversationArgs = {
   conversationId: Scalars['Int']['input']
 }
 
+export type MutationDeleteFileUploadArgs = {
+  fileId: Scalars['Int']['input']
+}
+
 export type MutationRenameConversationArgs = {
   conversationId: Scalars['Int']['input']
   title: Scalars['String']['input']
@@ -92,6 +141,10 @@ export type MutationRenameConversationArgs = {
 
 export type MutationSaveSettingsArgs = {
   input: SettingsInput
+}
+
+export type MutationUploadFileArgs = {
+  input: FileUploadInput
 }
 
 export type MutationArchiveConversationResult =
@@ -112,6 +165,15 @@ export type MutationDeleteConversationSuccess = {
   data: Scalars['Boolean']['output']
 }
 
+export type MutationDeleteFileUploadResult =
+  | Error
+  | MutationDeleteFileUploadSuccess
+
+export type MutationDeleteFileUploadSuccess = {
+  __typename?: 'MutationDeleteFileUploadSuccess'
+  data: Scalars['Boolean']['output']
+}
+
 export type MutationRenameConversationResult =
   | Error
   | MutationRenameConversationSuccess
@@ -128,12 +190,21 @@ export type MutationSaveSettingsSuccess = {
   data: Settings
 }
 
+export type MutationUploadFileResult = Error | MutationUploadFileSuccess
+
+export type MutationUploadFileSuccess = {
+  __typename?: 'MutationUploadFileSuccess'
+  data: FileUpload
+}
+
 export type Query = {
   __typename?: 'Query'
   conversation?: Maybe<Conversation>
   conversations: Array<Conversation>
   /** Resolves locally; kept so the frontend's user context keeps working. */
   currentUser: User
+  /** All uploaded files, oldest first (matches the old resolver's ordering). */
+  files: Array<FileUpload>
   /** Liveness check for the in-process API server. */
   health: Scalars['String']['output']
   settings: Settings
@@ -163,6 +234,12 @@ export type Subscription = {
    * conversation; the new user message and an empty assistant message are
    * persisted up front, then provider chunks stream over this subscription.
    *
+   * `fileIds` are uploads sent with this turn (the composer uploads them
+   * right before subscribing). They are attached to the user message here;
+   * file chunks from this conversation ground the turn. `message` may be
+   * empty when files are attached — the model then receives a synthesized
+   * instruction while the bubble keeps just the chips.
+   *
    * Kill switch: dropping the subscription (stop button / disconnect)
    * drops the receiver below; the pump task notices the failed send,
    * aborts the provider request, and persists the partial reply.
@@ -172,6 +249,7 @@ export type Subscription = {
 
 export type SubscriptionConversationArgs = {
   conversationId?: InputMaybe<Scalars['Int']['input']>
+  fileIds?: InputMaybe<Array<Scalars['Int']['input']>>
   message: Scalars['String']['input']
 }
 
@@ -244,6 +322,7 @@ export type CurrentUserQuery = {
 export type ConversationSubSubscriptionVariables = Exact<{
   conversationId?: InputMaybe<Scalars['Int']['input']>
   message: Scalars['String']['input']
+  fileIds?: InputMaybe<Array<Scalars['Int']['input']> | Scalars['Int']['input']>
 }>
 
 export type ConversationSubSubscription = {
@@ -259,6 +338,25 @@ export type ConversationSubSubscription = {
           messageId: string
           messageChunk: string
           done?: boolean | null
+        }
+      }
+}
+
+export type UploadFileMutationVariables = Exact<{
+  file: Scalars['Upload']['input']
+}>
+
+export type UploadFileMutation = {
+  __typename?: 'Mutation'
+  uploadFile:
+    | { __typename: 'Error'; message: string }
+    | {
+        __typename: 'MutationUploadFileSuccess'
+        data: {
+          __typename?: 'FileUpload'
+          id: string
+          originalName: string
+          status: FileStatus
         }
       }
 }
@@ -325,6 +423,11 @@ export type AllConversationsQuery = {
       id: string
       content: string
       role: MessageRole
+      files: Array<{
+        __typename?: 'FileUpload'
+        id: string
+        originalName: string
+      }>
     }>
   }>
 }
@@ -344,6 +447,11 @@ export type GetConversationWithMessagesQuery = {
       id: string
       content: string
       role: MessageRole
+      files: Array<{
+        __typename?: 'FileUpload'
+        id: string
+        originalName: string
+      }>
     }>
   } | null
 }
@@ -554,6 +662,20 @@ export const ConversationSubDocument = {
             },
           },
         },
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'fileIds' },
+          },
+          type: {
+            kind: 'ListType',
+            type: {
+              kind: 'NonNullType',
+              type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
+            },
+          },
+        },
       ],
       selectionSet: {
         kind: 'SelectionSet',
@@ -576,6 +698,14 @@ export const ConversationSubDocument = {
                 value: {
                   kind: 'Variable',
                   name: { kind: 'Name', value: 'message' },
+                },
+              },
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'fileIds' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'fileIds' },
                 },
               },
             ],
@@ -657,6 +787,112 @@ export const ConversationSubDocument = {
   ConversationSubSubscription,
   ConversationSubSubscriptionVariables
 >
+export const UploadFileDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'mutation',
+      name: { kind: 'Name', value: 'uploadFile' },
+      variableDefinitions: [
+        {
+          kind: 'VariableDefinition',
+          variable: { kind: 'Variable', name: { kind: 'Name', value: 'file' } },
+          type: {
+            kind: 'NonNullType',
+            type: {
+              kind: 'NamedType',
+              name: { kind: 'Name', value: 'Upload' },
+            },
+          },
+        },
+      ],
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'uploadFile' },
+            arguments: [
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'input' },
+                value: {
+                  kind: 'ObjectValue',
+                  fields: [
+                    {
+                      kind: 'ObjectField',
+                      name: { kind: 'Name', value: 'file' },
+                      value: {
+                        kind: 'Variable',
+                        name: { kind: 'Name', value: 'file' },
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: { kind: 'Name', value: 'Error' },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'message' },
+                      },
+                    ],
+                  },
+                },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: { kind: 'Name', value: 'MutationUploadFileSuccess' },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'data' },
+                        selectionSet: {
+                          kind: 'SelectionSet',
+                          selections: [
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'id' },
+                            },
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'originalName' },
+                            },
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'status' },
+                            },
+                          ],
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<UploadFileMutation, UploadFileMutationVariables>
 export const GetConversationDocument = {
   kind: 'Document',
   definitions: [
@@ -987,6 +1223,23 @@ export const AllConversationsDocument = {
                         name: { kind: 'Name', value: 'content' },
                       },
                       { kind: 'Field', name: { kind: 'Name', value: 'role' } },
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'files' },
+                        selectionSet: {
+                          kind: 'SelectionSet',
+                          selections: [
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'id' },
+                            },
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'originalName' },
+                            },
+                          ],
+                        },
+                      },
                     ],
                   },
                 },
@@ -1051,6 +1304,23 @@ export const GetConversationWithMessagesDocument = {
                         name: { kind: 'Name', value: 'content' },
                       },
                       { kind: 'Field', name: { kind: 'Name', value: 'role' } },
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'files' },
+                        selectionSet: {
+                          kind: 'SelectionSet',
+                          selections: [
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'id' },
+                            },
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'originalName' },
+                            },
+                          ],
+                        },
+                      },
                     ],
                   },
                 },

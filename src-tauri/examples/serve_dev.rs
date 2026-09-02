@@ -6,7 +6,8 @@
 //!
 //! Usage: `cargo run --example serve_dev`
 
-use privait_lib::{db, schema, server};
+use privait_lib::{db, embeddings, files, jobs, schema, server, storage};
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -20,7 +21,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         std::path::PathBuf::from(home).join("Library/Application Support/app.privait.client");
     let db = db::init(&data_dir)?;
 
-    let router = server::router_without_auth(schema::build_schema(db));
+    let jobs = jobs::Jobs::init(&data_dir.join("jobs.db")).await?;
+    let file_storage = Arc::new(storage::Storage::fs(&data_dir.join("files"))?);
+    let embedder: Arc<dyn embeddings::Embedder> =
+        Arc::new(embeddings::FastEmbedder::new(data_dir.join("models")));
+
+    // Same startup sweep the app runs: uploads happen on send, so stored-
+    // but-never-attached files are dead ends.
+    files::gc_orphan_uploads(&db, &file_storage).await;
+
+    tokio::spawn(jobs::run_worker(
+        jobs.clone(),
+        jobs::PipelineDeps {
+            db: db.clone(),
+            storage: file_storage.clone(),
+            embedder: embedder.clone(),
+        },
+    ));
+
+    let schema = schema::build_schema_with_context(
+        schema::SchemaContext {
+            db,
+            storage: Some(file_storage),
+            embedder,
+        },
+        schema::FirstChunkTimeout::default().0,
+    );
+
+    let router = server::router_without_auth(schema);
     println!("dev API on http://127.0.0.1:{port}/graphql (NO token auth)");
     server::serve_router(listener, router).await?;
 

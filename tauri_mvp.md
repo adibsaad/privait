@@ -112,11 +112,19 @@ Errors: keep the `Error { message }` / `XSuccess` union pattern.
 - [x] Port chunker + streaming unit tests from `src/server/llm/chunker.test.ts`
 - [x] Settings UI pulled forward from M4: `settings` query + `saveSettings` mutation + dialog in Nav (base URL / API key / model, blank defaults — chat errors until configured)
 
-### M3 — Files + RAG parity
-- [ ] `uploadFile`/`files`/`deleteFileUpload` → OpenDAL fs operator + `files` table, same validation (5MB, MIME allowlist)
-- [ ] `process-file` apalis task: pdf-extract / read text → tiktoken-rs chunk (512/64) → fastembed-rs embeddings → `file_chunks`
-- [ ] Retrieval: cosine top-4 memories + top-4 chunks (≥0.5) injected as system context in the chat pipeline
-- [ ] Files page parity: status UPLOADED→PROCESSED, delete removes file + chunks
+### M3 — Files + RAG parity ✅
+- [x] `uploadFile`/`files`/`deleteFileUpload` → OpenDAL fs operator + `files` table, same validation (5MB, MIME allowlist)
+- [x] `process-file` apalis task: pdf-extract / read text → tiktoken-rs chunk (512/64) → fastembed-rs embeddings → `file_chunks`
+- [x] Retrieval: cosine top-4 memories + top-4 chunks (≥0.5) injected as system context in the chat pipeline
+- [x] Files page parity: status UPLOADED→PROCESSED, delete removes file + chunks
+
+### M3 rework — files move into chat (user decision, see file_arch.md) ✅
+- [x] Files page removed (UI only; `files`/`deleteFileUpload` stay in the schema, unused)
+- [x] Composer attachments: paperclip + chips (assistant-ui attachment adapter), send enabled for text or files; multi-file
+- [x] On-send uploads → subscription `fileIds`; uploads processed inline (the apalis worker is out of the upload path; kept for Reflect-phase cron)
+- [x] Per-chat grounding: files link to their user message (migration v3 `files.message_id`); retrieval KNNs all chunks and filters to the conversation app-side (sqlite-vec KNN can't JOIN)
+- [x] Empty-message auto-instruct ("Please read the attached file(s) and respond."); file-only first message titles the thread from the file
+- [x] Startup orphan GC (stored-but-never-attached uploads); `Message.files` re-renders chips after reload
 
 ### M4 — Ship the shell
 - [ ] Schema parity check: introspected async-graphql schema diffs clean against old `schema.graphql` (minus auth)

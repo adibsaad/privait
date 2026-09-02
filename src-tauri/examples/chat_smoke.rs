@@ -17,6 +17,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         });
 
     let db = privait_lib::db::init(&data_dir)?;
+    let _jobs = privait_lib::jobs::Jobs::init(&data_dir.join("jobs.db")).await?;
+    let file_storage =
+        std::sync::Arc::new(privait_lib::storage::Storage::fs(&data_dir.join("files"))?);
+    let embedder: std::sync::Arc<dyn privait_lib::embeddings::Embedder> = std::sync::Arc::new(
+        privait_lib::embeddings::FastEmbedder::new(data_dir.join("models")),
+    );
     {
         let conn = db.get()?;
         let read = |key: &str| {
@@ -45,7 +51,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
 
-    let schema = privait_lib::schema::build_schema(db.clone());
+    let schema = privait_lib::schema::build_schema_with_context(
+        privait_lib::schema::SchemaContext {
+            db: db.clone(),
+            storage: Some(file_storage),
+            embedder,
+        },
+        privait_lib::schema::FirstChunkTimeout::default().0,
+    );
     let request = async_graphql::Request::new(
         r#"
         subscription Chat($conversationId: Int, $message: String!) {

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 
-import { FileStack, MessageSquare, Moon, Settings, Sun } from 'lucide-react'
+import { MessageSquare, Moon, Settings, Sun } from 'lucide-react'
 
 import { ThreadList } from '@frontend/components/assistant-ui/thread-list'
 import { Logo } from '@frontend/components/logo'
@@ -25,10 +25,7 @@ import {
 } from '@frontend/components/ui/sidebar'
 import { useTheme } from '@frontend/hooks/theme'
 
-const NAV_ITEMS = [
-  { to: '/chat', label: 'Chat', icon: MessageSquare },
-  { to: '/files', label: 'Files', icon: FileStack },
-]
+const NAV_ITEMS = [{ to: '/chat', label: 'Chat', icon: MessageSquare }]
 
 function ThemeToggle() {
   const { setTheme } = useTheme()

@@ -4,7 +4,6 @@ import './index.css'
 
 import { Chat } from './components/chat'
 import { ErrorPage } from './pages/error-page'
-import { Files } from './pages/files'
 import { Root } from './pages/root'
 
 export const router = createBrowserRouter([
@@ -20,10 +19,6 @@ export const router = createBrowserRouter([
       {
         path: 'chat',
         element: <Chat />,
-      },
-      {
-        path: 'files',
-        element: <Files />,
       },
       {
         path: '*',

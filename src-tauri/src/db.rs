@@ -7,6 +7,9 @@ use rusqlite::{Connection, OptionalExtension};
 /// Content database connection pool. One shared `privait.db` file.
 pub type Db = Pool<SqliteConnectionManager>;
 
+/// Embedding width shared by the vec0 tables and the embedder (bge-small).
+pub const EMBEDDING_DIM: usize = 384;
+
 static REGISTER_VEC: Once = Once::new();
 
 // Statically linked by build.rs from the vendored sqlite-vec amalgamation
@@ -100,6 +103,10 @@ CREATE VIRTUAL TABLE memories USING vec0(
     );",
     // v2 — thread archive state (rename/archive are persisted from M2 on)
     "ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0;",
+    // v3 — files attach to the user message that carries them (per-chat
+    // grounding scopes through messages; chips re-render from this link)
+    "ALTER TABLE files ADD COLUMN message_id INTEGER NULL REFERENCES messages(id) ON DELETE CASCADE;
+     CREATE INDEX idx_files_message ON files(message_id);",
 ];
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
