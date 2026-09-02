@@ -26,6 +26,21 @@ fn server_info(info: tauri::State<'_, ServerInfo>) -> ServerInfo {
     info.inner().clone()
 }
 
+/// HTML of the cargo-about-generated third-party license notices bundled
+/// with the app (`src-tauri/resources/licenses.html`, regenerated with
+/// `cd src-tauri && cargo about generate about.hbs > resources/licenses.html`).
+#[tauri::command]
+fn third_party_licenses(app: tauri::AppHandle) -> Result<String, String> {
+    let path = app
+        .path()
+        .resolve(
+            "resources/licenses.html",
+            tauri::path::BaseDirectory::Resource,
+        )
+        .map_err(|err| format!("failed to resolve licenses resource: {err}"))?;
+    std::fs::read_to_string(path).map_err(|err| format!("failed to read licenses: {err}"))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -98,7 +113,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![server_info])
+        .invoke_handler(tauri::generate_handler![server_info, third_party_licenses])
         .run(tauri::generate_context!())
         .expect("error while running Privait");
 }

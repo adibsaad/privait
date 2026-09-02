@@ -2,3 +2,6 @@
 **/dist
 
 **/generated
+
+# Historical SDL checked in for the parity gate — keep byte-identical to git history
+src-tauri/schema-parity

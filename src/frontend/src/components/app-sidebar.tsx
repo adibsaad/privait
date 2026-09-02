@@ -4,7 +4,7 @@ import { NavLink, useLocation } from 'react-router-dom'
 import { MessageSquare, Moon, Settings, Sun } from 'lucide-react'
 
 import { ThreadList } from '@frontend/components/assistant-ui/thread-list'
-import { Logo } from '@frontend/components/logo'
+import { DragStrip } from '@frontend/components/drag-strip'
 import { SettingsDialog } from '@frontend/components/settings-dialog'
 import { Button } from '@frontend/components/ui/button'
 import {
@@ -59,10 +59,10 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
 
   return (
     <Sidebar collapsible="none" className="border-r" {...props}>
-      <SidebarHeader className="border-b p-4">
-        <NavLink to="/" aria-label="Privait home">
-          <Logo />
-        </NavLink>
+      {/* macOS traffic lights sit here once the title bar is overlaid;
+          doubles as the window-drag region. */}
+      <SidebarHeader className="border-b p-0">
+        <DragStrip className="h-10" />
       </SidebarHeader>
 
       <SidebarContent className="overflow-y-auto">

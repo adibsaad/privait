@@ -182,9 +182,48 @@ Design: `file_arch.md`. Drives: uploads belong to chats, not a Files page.
 - [x] Tests: 81 Rust (+3: file-attach/grounding, file-only synthesis/title, idempotent relink, orphan GC, inline PROCESSED, rollback), 26 frontend (chips carry through reconciliation).
 - [x] Live: attach → send with empty text → assistant recalls file facts; earlier chat files keep grounding their own chat; orphan files ground nothing; GC sweeps on start.
 
-## Next
+## M4 — Ship the shell ✅
 
-M4 — Ship the shell (schema parity diff, provider smoke vs OpenRouter + local ollama, `tauri build` → dmg, delete `src/server`/docker, manual smoke checklist).
+Note: `src/server/graphql/generated/schema.graphql` was silently overwritten by codegen's legacy output path during the files-in-chat commit — the *original* Pothos SDL lives in git history (`6f687a0~1`); the parity diff uses a checked-in copy.
+
+### 1. Schema parity check ✅
+
+- [x] Historical SDL checked in at `src-tauri/schema-parity/old-schema.graphql` (from `git show 6f687a0~1`)
+- [x] `scripts/schema-parity.mjs` (`pnpm schema:parity`): structural diff (types/fields/args/kinds, order-insensitive) old vs current snapshot; exits nonzero on diffs outside the reviewed expected set — and wired into CI (frontend job)
+- [x] Result: **28 known, reviewed deviations, no unexpected diffs** — auth removals (`magicLink`/`completeMagicLink`/`AuthSuccessResponse`/`DateTime`), M2/M3 additions (`archived`, `Message.files`, `Settings`/`saveSettings`, `renameConversation`/`archiveConversation`, `health`, `fileIds`, their union types), nullability tightening (`conversations`/`currentUser`/`files`/subscription result), `createdAt: DateTime!` → `String!` (frontend renders `new Date(iso)` — ISO strings preserved)
+- [x] `codegen.ts`: legacy `src/server` output path dropped; graphqlsp schema repointed to the snapshot
+
+### 2. Provider smoke — deferred (user decision)
+
+- [ ] OpenRouter smoke skipped: needs a key; `cargo run --example chat_smoke` proves the provider path against the user's configured provider (Featherless)
+- [ ] Local ollama smoke skipped: not installed on this machine; Settings dialog already accepts any OpenAI-compatible base URL
+
+### 3. `tauri build` → dmg ✅
+
+- [x] App icon: generated placeholder mark (indigo gradient tile, white geometric "P") → `pnpm tauri icon` regenerated the full set
+- [x] AGPL notices: Settings → About section (version, AGPL-3.0 link, third-party licenses viewer via `third_party_licenses` command over the bundled `resources/licenses.html`); generated with `cargo about` (`src-tauri/about.toml` + `about.hbs`), 12 licenses / 198 crates
+- [x] `.app` + `.dmg` built: `src-tauri/target/release/bundle/{macos,dmg}/` (~40MB dmg, 58MB app). NOTE: tauri's dmg bundling runs a Finder AppleScript that needs **Automation permission for the terminal** (`Not authorized to send Apple events to Finder, -1743`); until granted, build the dmg with `--sandbox-safe`:
+  `cd src-tauri/target/release/bundle/dmg && bash bundle_dmg.sh --volname "Privait" --icon "Privait.app" 180 170 --app-drop-link 480 170 --window-size 660 400 --hide-extension "Privait.app" --sandbox-safe "Privait_0.1.0_aarch64.dmg" "../macos"`
+
+### 4. Legacy server deleted ✅
+
+- [x] Removed: `src/server/`, `docker/`, `docker-compose.yml`, `Procfile.example`, `.envrc.example`, `.dockerignore`, `scripts/db`, `scripts/init-dev.sh`, `scripts/download-models.sh`
+- [x] Root `package.json` rewritten: server/overmind/db scripts gone, `test:frontend` now one-shot `vitest run`, `schema:parity` added; server-only deps dropped (`pg`, `@types/pg`, `pino-pretty`, `wait-on`, `ts-node`, `esbuild-loader`); lint-staged server entry gone
+- [x] `eslint.config.mjs`, `tsconfig.json`, `jsconfig.json`, `pnpm-workspace.yaml` cleaned of `@server`; README rewritten for the Tauri flow; CI verified clean (no docker/src-server refs since M1)
+
+### 5. Manual smoke checklist ✅
+
+- [x] Cold start: 416ms warm / 2.1s first-exec (macOS first-launch overhead) to "API server listening" — budget met
+- [x] Chat streams + persists: `cargo run --example chat_smoke` → "pong", USER/ASSISTANT rows, end-to-end green
+- [x] File pipeline: multipart `uploadFile` against the live DB → inline extract/chunk/embed → PROCESSED; delete removed everything
+- [x] UI: webview renders sidebar/chat/settings/About (checked against this worktree's vite — the :4000 server belongs to a *different* worktree, see lessons); licenses viewer shows the web fallback in plain-web mode (full HTML renders in the desktop app via the bundled resource)
+- [x] Privacy: only outbound HTTP client in the core is the reqwest client in `provider.rs` pointed at the user's configured `provider.baseUrl`; fastembed model download on first embed is the only other known fetch (documented). Little Snitch observation is user-side.
+
+### Verify
+
+`cargo fmt/clippy/test` green (82 tests), `tsc -b` green, vite build green, eslint green (5 pre-existing vendored-ui warnings), `vitest run` 26/26, `pnpm codegen` green, parity gate green, dmg verified by mount.
+
+## Next
 
 ## CI note (M1 wrap-up)
 

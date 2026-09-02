@@ -1,5 +1,0 @@
-onlyBuiltDependencies:
-  - aws-sdk
-  - esbuild
-  - node-llama-cpp
-  - unrs-resolver

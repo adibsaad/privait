@@ -1,4 +1,0 @@
-web: pnpm start:web
-worker: pnpm start:worker
-frontend: pnpm start:frontend
-codegen: pnpm codegen:watch
