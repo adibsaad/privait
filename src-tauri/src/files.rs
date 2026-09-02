@@ -292,6 +292,33 @@ pub async fn gc_orphan_uploads(db: &Db, storage: &Storage) -> usize {
     removed
 }
 
+/// Deletes every upload that rode on messages of a conversation: vector
+/// chunks, storage bytes, and (via the message cascade when the conversation
+/// row goes) the files rows themselves. Storage failures don't abort the
+/// chat delete — orphaned bytes are harmless; the conversation isn't.
+/// Returns the storage keys it removed so callers can do the (async) storage
+/// work without holding the connection across awaits (rusqlite is !Sync).
+pub fn drop_conversation_files_db(
+    conn: &Connection,
+    conversation_id: i64,
+) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT f.id, f.file_name FROM files f
+         JOIN messages m ON m.id = f.message_id
+         WHERE m.conversation_id = ?1",
+    )?;
+    let files: Vec<(i64, String)> = stmt
+        .query_map([conversation_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+
+    let mut storage_keys = Vec::with_capacity(files.len());
+    for (file_id, file_name) in files {
+        conn.execute("DELETE FROM file_chunks WHERE file_id = ?1", [file_id])?;
+        storage_keys.push(file_name);
+    }
+    Ok(storage_keys)
+}
+
 fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }

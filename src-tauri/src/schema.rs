@@ -441,6 +441,27 @@ impl Mutation {
             return MutationDeleteConversationResult::Error(GqlError::new(err.message));
         }
 
+        // The uploads belong to the chat: drop their vectors and storage
+        // bytes too. The files rows themselves cascade through the messages
+        // when the conversation goes.
+        match files::drop_conversation_files_db(&conn, conversation_id) {
+            Ok(storage_keys) => {
+                if let Some(storage) = match ctx.data::<Option<Arc<Storage>>>() {
+                    Ok(Some(storage)) => Some(storage.clone()),
+                    _ => None,
+                } {
+                    for key in storage_keys {
+                        if let Err(err) = storage.delete(&key).await {
+                            eprintln!("[privait] storage delete failed for {key}: {err}");
+                        }
+                    }
+                }
+            }
+            Err(err) => {
+                return MutationDeleteConversationResult::Error(GqlError::new(err.to_string()))
+            }
+        }
+
         match conn.execute("DELETE FROM conversations WHERE id = ?1", [conversation_id]) {
             Ok(_) => MutationDeleteConversationResult::MutationDeleteConversationSuccess(
                 MutationDeleteConversationSuccess { data: true },
@@ -2688,5 +2709,108 @@ mod tests {
         assert_eq!(files[0]["status"], json!("PROCESSED"));
         assert_eq!(files[0]["type"], json!("TEXT"));
         assert_eq!(files[1]["originalName"], json!("second.txt"));
+    }
+
+    /// Deleting a chat removes the uploads that rode on its messages:
+    /// vector chunks and storage bytes. Other chats' files stay put.
+    #[tokio::test]
+    async fn deleting_a_chat_deletes_its_uploaded_files() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = crate::db::init(dir.path()).unwrap();
+        let storage = crate::storage::Storage::memory().unwrap();
+
+        // Chat 1 (to be deleted) with an attached, processed file.
+        let doomed = crate::files::store_upload(
+            &db,
+            &storage,
+            b"doomed content".to_vec(),
+            "doomed.txt",
+            "text/plain",
+        )
+        .await
+        .unwrap();
+        // Another chat's file that must survive.
+        let survivor = crate::files::store_upload(
+            &db,
+            &storage,
+            b"survivor content".to_vec(),
+            "survivor.txt",
+            "text/plain",
+        )
+        .await
+        .unwrap();
+        {
+            let conn = db.get().unwrap();
+            conn.execute("INSERT INTO conversations (id, title, created_at, updated_at) VALUES (1, 'doomed', '0', '0'), (2, ' survivor chat', '0', '0')", [])
+                .unwrap();
+            for conversation in [1, 2] {
+                conn.execute(
+                    "INSERT INTO messages (id, conversation_id, role, content, created_at)
+                     VALUES (?1, ?2, 'USER', 'with attachment', '0')",
+                    rusqlite::params![conversation, conversation],
+                )
+                .unwrap();
+            }
+            crate::files::link_to_message(&conn, &[doomed.id], 1).unwrap();
+            crate::files::link_to_message(&conn, &[survivor.id], 2).unwrap();
+
+            for file in [&doomed, &survivor] {
+                conn.execute(
+                    "INSERT INTO file_chunks (embedding, content, file_id) VALUES (?1, 'chunk', ?2)",
+                    rusqlite::params![
+                        db::embedding_to_blob(&vec![1.0; db::EMBEDDING_DIM]),
+                        file.id
+                    ],
+                )
+                .unwrap();
+            }
+        }
+
+        let embedder: Arc<dyn Embedder> = Arc::new(crate::embeddings::FakeEmbedder::new(|_| {
+            vec![0.0; db::EMBEDDING_DIM]
+        }));
+        let schema = upload_context(db.clone(), storage.clone(), embedder);
+
+        let response = schema
+            .execute(
+                "mutation { deleteConversation(conversationId: 1) { __typename
+                    ... on MutationDeleteConversationSuccess { data }
+                    ... on Error { message } } }",
+            )
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&response.data).unwrap()["deleteConversation"]["data"],
+            json!(true)
+        );
+
+        let conn = db.get().unwrap();
+        let (files, chunks): (i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM files WHERE id = ?1),
+                        (SELECT COUNT(*) FROM file_chunks WHERE file_id = ?1)",
+                [doomed.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(files, 0, "doomed file row cascaded away");
+        assert_eq!(chunks, 0, "doomed file chunks deleted");
+        assert!(
+            storage.read(&doomed.file_name).await.is_err(),
+            "storage bytes deleted"
+        );
+
+        let (files, chunks): (i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM files WHERE id = ?1),
+                        (SELECT COUNT(*) FROM file_chunks WHERE file_id = ?1)",
+                [survivor.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(files, 1, "other chat's file untouched");
+        assert_eq!(chunks, 1);
+        assert!(storage.read(&survivor.file_name).await.is_ok());
     }
 }
