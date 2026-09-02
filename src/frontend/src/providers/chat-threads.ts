@@ -197,3 +197,51 @@ export function reconcileThreadList(
   }
   return [{ id: threadId, status: 'regular', title: '' }, ...withoutPending]
 }
+
+/** Minimal shape of a cached conversation row (apollo AllConversations). */
+export type CachedConversation = {
+  id: string
+  archived: boolean
+  title: string
+}
+
+/**
+ * Boot selection: never restore the app into an archived chat — pick the
+ * first live conversation, or start on the new-chat page.
+ */
+export function pickInitialThreadId(
+  conversations: ReadonlyArray<{ id: string; archived: boolean }>,
+): string {
+  return conversations.find(c => !c.archived)?.id ?? EMPTY_THREAD_ID
+}
+
+/** Minimal update surface for a cached conversation (apollo AllConversations). */
+export type ConversationCacheUpdate =
+  | Partial<Pick<CachedConversation, 'archived' | 'title'>>
+  | 'remove'
+
+/**
+ * Builds the AllConversations payload after a sidebar-side update (archive,
+ * unarchive, rename, delete). The archive mutation only returns a Boolean,
+ * so this recovered payload is what keeps other cache consumers — settings'
+ * archived list, titles — instantly accurate. Untouched rows keep their
+ * reference so memoization survives. Generic over the row shape: callers
+ * pass the full cached conversation (with messages), tests can pass stubs.
+ */
+export function applyConversationCacheUpdate<
+  T extends { id: string; archived: boolean; title: string },
+>(
+  conversations: readonly T[],
+  conversationId: string,
+  update: ConversationCacheUpdate,
+): T[] {
+  return conversations.flatMap(conversation => {
+    if (conversation.id !== conversationId) {
+      return [conversation]
+    }
+    if (update === 'remove') {
+      return []
+    }
+    return [{ ...conversation, ...update }]
+  })
+}

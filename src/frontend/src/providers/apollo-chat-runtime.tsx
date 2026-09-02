@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { gql } from '@apollo/client'
 import {
+  useApolloClient,
   useLazyQuery,
   useMutation,
   useSubscription,
@@ -21,6 +22,7 @@ import { toast } from 'sonner'
 import { EMPTY_THREAD_ID } from '@frontend/config/consts'
 import { useThreadContext } from '@frontend/context/thread'
 import {
+  AllConversationsDocument,
   ArchiveConversationDocument,
   ConversationSubDocument,
   DeleteConversationDocument,
@@ -30,6 +32,7 @@ import {
 } from '@frontend/graphql/output/graphql'
 import {
   appendAssistantChunk,
+  applyConversationCacheUpdate,
   dropNewThreadBucket,
   reconcileFirstChunk,
   reconcileThreadList,
@@ -208,7 +211,32 @@ export function ApolloChatRuntimeProvider({
   const [archiveConversationMut] = useMutation(ArchiveConversationDocument)
   const [uploadFileMut] = useMutation(UploadFileDocument)
   const [loadConversation] = useLazyQuery(GetConversationDocument)
+  const apolloClient = useApolloClient()
   const { adapter, takeFiles } = useComposerAttachmentAdapter()
+
+  // The settings dialog (and any other AllConversations consumer) shares the
+  // normalized Apollo cache. The archive mutation only returns a Boolean, so
+  // cache writes here are what keep providers/titles in sync instantly —
+  // the ThreadContext lists alone go stale everywhere else.
+  const syncCache = (
+    conversationId: string,
+    update: Partial<{ archived: boolean; title: string }> | 'remove',
+  ) => {
+    const cached = apolloClient.readQuery({ query: AllConversationsDocument })
+    if (!cached?.conversations) {
+      return
+    }
+    apolloClient.writeQuery({
+      query: AllConversationsDocument,
+      data: {
+        conversations: applyConversationCacheUpdate(
+          cached.conversations,
+          conversationId,
+          update,
+        ),
+      },
+    })
+  }
 
   // threads
   const {
@@ -243,6 +271,7 @@ export function ApolloChatRuntimeProvider({
       setThreadList(prev =>
         prev.map(t => (t.id === threadId ? { ...t, title: newTitle } : t)),
       )
+      syncCache(threadId, { title: newTitle })
 
       if (Number(threadId)) {
         renameConversationMut({
@@ -262,11 +291,19 @@ export function ApolloChatRuntimeProvider({
         { ...thread, status: 'archived' },
         ...prev,
       ])
+      syncCache(threadId, { archived: true })
 
       if (Number(threadId)) {
         archiveConversationMut({
           variables: { conversationId: Number(threadId), archived: true },
         })
+      }
+
+      // Archiving the open chat must leave the composer — drop to the new
+      // chat page rather than keep a hidden conversation on screen.
+      if (currentThreadId === threadId) {
+        setCurrentThreadId(EMPTY_THREAD_ID)
+        navigate('/chat')
       }
     },
 
@@ -281,6 +318,7 @@ export function ApolloChatRuntimeProvider({
         { id: thread.id, status: 'regular', title: thread.title },
         ...prev,
       ])
+      syncCache(threadId, { archived: false })
 
       if (Number(threadId)) {
         archiveConversationMut({
@@ -306,6 +344,7 @@ export function ApolloChatRuntimeProvider({
       if (currentThreadId === threadId) {
         setCurrentThreadId(nextThreadId ?? EMPTY_THREAD_ID)
       }
+      syncCache(threadId, 'remove')
 
       // Not checking for success, for now
       if (Number(threadId)) {

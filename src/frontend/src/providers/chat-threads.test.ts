@@ -6,8 +6,10 @@ import type { Thread } from '@frontend/context/thread'
 import type { ThreadsMap } from './chat-threads'
 import {
   appendAssistantChunk,
+  applyConversationCacheUpdate,
   assistantChunkMessage,
   dropNewThreadBucket,
+  pickInitialThreadId,
   reconcileFirstChunk,
   reconcileThreadList,
   userMessage,
@@ -284,5 +286,56 @@ describe('userMessage attachments', () => {
     expect(next.get('42')?.[0]).toEqual(
       userMessage('9', '', [{ id: 'f1', name: 'a.md' }]),
     )
+  })
+})
+
+describe('pickInitialThreadId', () => {
+  it('selects the first non-archived conversation', () => {
+    const conversations = [
+      { id: '1', archived: true },
+      { id: '2', archived: false },
+      { id: '3', archived: false },
+    ]
+    expect(pickInitialThreadId(conversations)).toBe('2')
+  })
+
+  it('never restores the app into an archived chat', () => {
+    const conversations = [{ id: '1', archived: true }]
+    expect(pickInitialThreadId(conversations)).toBe(EMPTY_THREAD_ID)
+  })
+
+  it('starts on the new-chat page when history is empty', () => {
+    expect(pickInitialThreadId([])).toBe(EMPTY_THREAD_ID)
+  })
+})
+
+describe('applyConversationCacheUpdate', () => {
+  const cache = [
+    { id: '1', archived: false, title: 'first' },
+    { id: '2', archived: false, title: 'second' },
+  ]
+
+  it('archives without touching other rows (reference-stable)', () => {
+    const next = applyConversationCacheUpdate(cache, '2', { archived: true })
+
+    expect(next[0]).toBe(cache[0])
+    expect(next[1]).toMatchObject({ id: '2', archived: true, title: 'second' })
+    expect(cache[1].archived).toBe(false)
+  })
+
+  it('renames the title so the archived list stays accurate', () => {
+    const next = applyConversationCacheUpdate(cache, '1', { title: 'renamed' })
+    expect(next[0].title).toBe('renamed')
+  })
+
+  it('removes the conversation on delete', () => {
+    const next = applyConversationCacheUpdate(cache, '1', 'remove')
+    expect(next).toEqual([{ id: '2', archived: false, title: 'second' }])
+  })
+
+  it('tolerates an unknown id', () => {
+    expect(
+      applyConversationCacheUpdate(cache, '404', { archived: true }),
+    ).toEqual(cache)
   })
 })

@@ -11,7 +11,10 @@ import {
   AllConversationsDocument,
   MessageRole,
 } from '@frontend/graphql/output/graphql'
-import { userAttachment } from '@frontend/providers/chat-threads'
+import {
+  pickInitialThreadId,
+  userAttachment,
+} from '@frontend/providers/chat-threads'
 
 gql(/* GraphQL */ `
   query allConversations {
@@ -131,7 +134,9 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
           title: c.title,
         })),
     )
-    setCurrentThreadId(data.conversations[0].id)
+    // Never restore the app into an archived chat: pick the first live one,
+    // or start on the new-chat page.
+    setCurrentThreadId(pickInitialThreadId(data.conversations))
   }, [loading, data])
 
   if (loading) {
