@@ -3,7 +3,7 @@
 //! implementation — fastembed-rs with bge-small-en-v1.5 (384 dims, matches
 //! the sqlite-vec `file_chunks`/`memories` tables). Cloud embeddings would
 //! violate "private by default" for a background pipeline, so this stays
-//! fully local (tauri_mvp.md decision).
+//! fully local (docs/architecture.md decision).
 
 use std::path::PathBuf;
 use std::sync::Arc;

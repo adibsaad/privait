@@ -1,5 +1,5 @@
 //! Job queue: all apalis usage lives here so version churn can't leak into
-//! resolvers (tauri_mvp.md decision). The queue owns its own `jobs.db`
+//! resolvers (docs/architecture.md decision). The queue owns its own `jobs.db`
 //! (sqlx/apalis); the content DB stays rusqlite.
 //!
 //! The file pipeline moved to `files.rs` (the chat-composer path processes
@@ -15,7 +15,7 @@ use sqlx::sqlite::SqlitePoolOptions;
 pub use crate::files::PipelineDeps;
 
 /// All apalis usage is routed through this module so version churn can't leak
-/// into resolvers (see tauri_mvp.md decisions).
+/// into resolvers (see docs/architecture.md decisions).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessFileJob {
     pub file_id: i64,

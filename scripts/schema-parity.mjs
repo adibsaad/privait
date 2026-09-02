@@ -91,7 +91,8 @@ const diffSchemas = (oldMap, newMap) => {
   return lines.sort()
 }
 
-// The full expected parity delta, reviewed against tauri_mvp.md's M4 gate:
+// The full expected parity delta, reviewed against the M4 gate in
+// docs/architecture.md:
 // "diffs clean against old schema.graphql (minus auth)" plus the documented
 // M2/M3 additions (rename/archive persistence, settings, Message.files,
 // health, subscription fileIds) and the nullability tightening on

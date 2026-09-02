@@ -1,5 +1,5 @@
 //! Local file storage behind a tiny OpenDAL wrapper — the desktop
-//! replacement for the web app's S3/RustFS service (see tauri_mvp.md).
+//! replacement for the web app's S3/RustFS service (see docs/architecture.md).
 //! Files live as plain files under the app-data `files/` directory.
 
 use std::path::Path;

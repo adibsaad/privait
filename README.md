@@ -2,13 +2,9 @@
 
 Privait is a private, local-first AI workspace — a Tauri desktop app (Rust core, React frontend) with chat, file grounding (RAG), and local embeddings. All data lives on your device; the only network traffic is to the chat provider you configure.
 
-## Architecture
+## Docs
 
-- **Shell:** Tauri 2 wrapping the React UI (`src/frontend/`)
-- **Core:** in-process Rust server (`src-tauri/`) — axum + async-graphql, SQLite + sqlite-vec, apalis job queue, OpenDAL local file storage, fastembed (bge-small) embeddings
-- **Inference:** any OpenAI-compatible provider (OpenRouter, ollama, LM Studio, …) configured in Settings
-
-See [roadmap.md](roadmap.md), [vision.md](vision.md), and [tauri_mvp.md](tauri_mvp.md) for direction and history.
+See [docs/](docs/) — architecture, vision, and roadmap.
 
 ## Dev
 

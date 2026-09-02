@@ -40,4 +40,4 @@ A thinking companion that lives entirely on your machine. It helps you start wri
 - Not a cloud service. There is no Privait server that sees your data, ever.
 - Not a generic AI workspace. The depth is in journaling/reflection, not in being another generic AI chatbot.
 
-Architecture direction, roadmap, and open questions live in [roadmap.md](roadmap.md).
+How the system works is described in [architecture.md](architecture.md); architecture direction, roadmap, and open questions live in [roadmap.md](roadmap.md).

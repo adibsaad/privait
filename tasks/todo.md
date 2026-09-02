@@ -1,6 +1,6 @@
 # Tauri MVP — tasks
 
-Source of truth: `tauri_mvp.md`. This file tracks the current milestone's working checklist.
+Source of truth: `docs/architecture.md`. This file tracks the current milestone's working checklist.
 
 ## M0 — Scaffold ✅
 
@@ -171,10 +171,10 @@ User decision: settings storage = the M1 `settings(key, value)` SQLite table (al
 
 ## Files-in-chat rework (user decision after M3) ✅
 
-Design: `file_arch.md`. Drives: uploads belong to chats, not a Files page.
+Design: `docs/architecture.md`. Drives: uploads belong to chats, not a Files page.
 
 - [x] Removed the Files page + nav (schema keeps `files`/`deleteFileUpload` unused) .
-- [x] Migration v3: `files.message_id` (chips re-render per message; chat scope via join). Identifier refinement vs the `conversation_id` sketch in file_arch.md — documented there.
+- [x] Migration v3: `files.message_id` (chips re-render per message; chat scope via join). Identifier refinement vs the `conversation_id` sketch in docs/architecture.md — documented there.
 - [x] `uploadFile` runs the pipeline inline and returns PROCESSED (roll-back on failure); apalis worker stays wired but out of the send path.
 - [x] Subscription takes `fileIds`, links them to the fresh user message (idempotent `message_id IS NULL` guard), grounds per-chat: KNN over all chunks filtered to the conversation's file ids app-side (sqlite-vec KNN breaks under JOINs). Empty message + files → synthesized "Please read the attached file(s) and respond." (bubble keeps chips, DB keeps ""); file-only first message titles the thread from the file name.
 - [x] Frontend: assistant-ui attachment adapter (MIME allowlist mirrored), composer chips + paperclip, send gating (text-or-files), parallel uploads → `fileIds`, optimistic chips → persisted `Message.files` chips after reload; Files page deleted.
