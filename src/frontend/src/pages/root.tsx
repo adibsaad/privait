@@ -1,6 +1,7 @@
 import { Outlet } from 'react-router-dom'
 
 import { AppSidebar } from '../components/app-sidebar'
+import { TitleBar } from '../components/titlebar'
 import {
   SidebarInset,
   SidebarProvider,
@@ -16,8 +17,11 @@ export function Root() {
         <SidebarProvider>
           <AppSidebar />
           <SidebarInset>
-            <SidebarTrigger className="absolute left-2 top-2 z-10 md:hidden" />
-            <Outlet />
+            <TitleBar />
+            <div className="min-h-0 flex-1">
+              <Outlet />
+            </div>
+            <SidebarTrigger className="absolute left-2 top-12 z-10 md:hidden" />
           </SidebarInset>
         </SidebarProvider>
       </ApolloChatRuntimeProvider>
