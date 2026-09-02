@@ -93,26 +93,6 @@ export default defineConfig(
     rules: tsAllRulesOff,
   },
   {
-    files: ['src/server/**/*.{ts,tsx,js,jsx}'],
-    languageOptions: {
-      globals: {
-        ...globals.node,
-        AsyncGenerator: 'readonly',
-      },
-    },
-  },
-  {
-    files: [
-      'src/server/**/*.{test.ts,test.tsx,test.js,test.jsx}',
-      'src/server/tests/setupTests.ts',
-    ],
-    languageOptions: {
-      globals: {
-        ...globals.vitest,
-      },
-    },
-  },
-  {
     files: ['src/frontend/tailwind.config.js'],
     languageOptions: {
       globals: globals.node,

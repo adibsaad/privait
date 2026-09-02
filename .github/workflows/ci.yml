@@ -27,6 +27,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Schema parity gate
+        run: node scripts/schema-parity.mjs
+
       - name: Run linting
         run: pnpm lint
 

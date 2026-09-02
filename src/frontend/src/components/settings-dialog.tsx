@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 
 import { gql } from '@apollo/client'
 import { useMutation, useQuery } from '@apollo/client/react'
-import { ArchiveIcon, KeyRound, Undo2Icon } from 'lucide-react'
+import { ArchiveIcon, InfoIcon, KeyRound, Undo2Icon } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@frontend/components/ui/button'
@@ -21,7 +21,10 @@ import {
   GetSettingsDocument,
   SaveSettingsDocument,
 } from '@frontend/graphql/output/graphql'
+import { thirdPartyLicenses } from '@frontend/lib/tauri'
 import { cn } from '@frontend/lib/utils'
+
+import frontendPackageJson from '../../package.json'
 
 gql(/* GraphQL */ `
   query GetSettings {
@@ -51,11 +54,12 @@ gql(/* GraphQL */ `
   }
 `)
 
-type Section = 'provider' | 'archived'
+type Section = 'provider' | 'archived' | 'about'
 
 const SECTIONS: { id: Section; label: string; icon: typeof KeyRound }[] = [
   { id: 'provider', label: 'Provider', icon: KeyRound },
   { id: 'archived', label: 'Archived chats', icon: ArchiveIcon },
+  { id: 'about', label: 'About', icon: InfoIcon },
 ]
 
 export function SettingsDialog({
@@ -92,8 +96,10 @@ export function SettingsDialog({
         <div className="min-w-0 flex-1">
           {section === 'provider' ? (
             <ProviderSection />
-          ) : (
+          ) : section === 'archived' ? (
             <ArchivedChatsSection />
+          ) : (
+            <AboutSection />
           )}
         </div>
       </DialogContent>
@@ -248,6 +254,79 @@ function ArchivedChatsSection() {
           ))}
         </ul>
       )}
+      <div className="h-2" />
+    </div>
+  )
+}
+
+function AboutSection() {
+  const [licensesHtml, licensesHtmlSet] = useState<string | null>(null)
+  const [showLicenses, showLicensesSet] = useState(false)
+  const [licensesError, licensesErrorSet] = useState<string | null>(null)
+
+  const loadLicenses = async () => {
+    showLicensesSet(true)
+    if (licensesHtml || licensesError) return
+    try {
+      const html = await thirdPartyLicenses()
+      if (html) licensesHtmlSet(html)
+      else licensesErrorSet('Not available outside the desktop app.')
+    } catch {
+      licensesErrorSet('Could not load license notices.')
+    }
+  }
+
+  return (
+    <div className="flex max-h-[24rem] flex-col">
+      <DialogHeader className="p-6 pb-4">
+        <DialogTitle>About</DialogTitle>
+        <DialogDescription>
+          Privait {frontendPackageJson.version} — a private, local-first AI
+          workspace. All data stays on this device; the only network traffic is
+          to the chat provider you configure.
+        </DialogDescription>
+      </DialogHeader>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-6">
+        <p className="text-sm">
+          Licensed under the{' '}
+          <a
+            href="https://www.gnu.org/licenses/agpl-3.0.html"
+            target="_blank"
+            rel="noreferrer"
+            className="underline underline-offset-2"
+          >
+            GNU Affero General Public License v3.0
+          </a>
+          . The project repository ships the full license text.
+        </p>
+
+        <Button
+          variant="outline"
+          size="sm"
+          className="mt-3"
+          onClick={loadLicenses}
+        >
+          {showLicenses ? 'Hide' : 'View'} third-party licenses
+        </Button>
+
+        {showLicenses && (
+          <div className="mt-3">
+            {licensesError ? (
+              <p className="text-muted-foreground text-sm">{licensesError}</p>
+            ) : licensesHtml ? (
+              <iframe
+                title="Third-party licenses"
+                srcDoc={licensesHtml}
+                sandbox=""
+                className="h-64 w-full rounded-md border bg-white"
+              />
+            ) : (
+              <p className="text-muted-foreground text-sm">Loading…</p>
+            )}
+          </div>
+        )}
+      </div>
       <div className="h-2" />
     </div>
   )

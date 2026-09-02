@@ -2,8 +2,9 @@ import type { CodegenConfig } from '@graphql-codegen/cli'
 
 const config: CodegenConfig = {
   // The Tauri app's checked-in SDL snapshot (refreshed by the Rust
-  // schema-snapshot test with PRIVAIT_UPDATE_SCHEMA_SNAPSHOT=1). The old
-  // Fastify server that used to serve this over HTTP is frozen.
+  // schema-snapshot test with PRIVAIT_UPDATE_SCHEMA_SNAPSHOT=1). Parity
+  // against the original Fastify/Pothos schema is gated by
+  // `pnpm schema:parity`.
   schema: './src-tauri/schema.snapshot.graphql',
   hooks: {
     afterAllFileWrite: ['prettier -w --config .prettierrc'],
@@ -12,13 +13,6 @@ const config: CodegenConfig = {
     'src/frontend/src/graphql/output/': {
       preset: 'client',
       documents: ['src/frontend/src/**/*.{ts,tsx}'],
-    },
-    // Used by @0no-co/graphqlsp for vscode intellisense
-    './src/server/graphql/generated/schema.graphql': {
-      plugins: ['schema-ast'],
-      config: {
-        includeDirectives: true,
-      },
     },
   },
   ignoreNoDocuments: true,

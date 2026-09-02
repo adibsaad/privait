@@ -18,3 +18,12 @@ export function serverInfo(): Promise<ServerInfo> {
   cached ??= invoke<ServerInfo>('server_info')
   return cached
 }
+
+/**
+ * HTML of the generated third-party license notices bundled with the app
+ * (Tauri only; resolves to null elsewhere, e.g. plain-web dev).
+ */
+export function thirdPartyLicenses(): Promise<string | null> {
+  if (!isTauri()) return Promise.resolve(null)
+  return invoke<string>('third_party_licenses')
+}
