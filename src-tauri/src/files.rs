@@ -277,7 +277,6 @@ pub fn claim_to_project(
             rusqlite::params![project_id, file_id],
         )?;
         claimed += conn.changes() as usize;
-
     }
     Ok(claimed)
 }
@@ -287,9 +286,7 @@ pub fn claim_to_project(
 /// here lets the caller drop the storage bytes with the returned keys
 /// (without holding the !Sync connection across awaits).
 pub fn drop_project_files_db(conn: &Connection, project_id: i64) -> rusqlite::Result<Vec<String>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, file_name FROM files WHERE project_id = ?1",
-    )?;
+    let mut stmt = conn.prepare("SELECT id, file_name FROM files WHERE project_id = ?1")?;
     let files: Vec<(i64, String)> = stmt
         .query_map([project_id], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<Result<_, _>>()?;

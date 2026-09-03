@@ -2,7 +2,7 @@
 //! per-project instructions, and holds a knowledge folder grounded into its
 //! chats.
 
-use async_graphql::{Context, ID, Object};
+use async_graphql::{Context, Object, ID};
 use rusqlite::OptionalExtension;
 
 use crate::db::Db;
@@ -74,7 +74,10 @@ impl GqlProject {
 
     /// This project's live chats, newest first (archive state lives on the
     /// conversation rows; archived chats stay out of the project stat here).
-    async fn conversations(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<GqlConversation>> {
+    async fn conversations(
+        &self,
+        ctx: &Context<'_>,
+    ) -> async_graphql::Result<Vec<GqlConversation>> {
         let db = ctx.data::<Db>()?;
         let conn = db.get()?;
         let mut stmt = conn.prepare(

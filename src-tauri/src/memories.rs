@@ -5,8 +5,8 @@
 
 use crate::db::{self, Db};
 use crate::embeddings::EmbedError;
-use crate::provider::ProviderError;
 use crate::embeddings::Embedder;
+use crate::provider::ProviderError;
 use crate::provider::{ChatMessage, ChatProvider, ChatRequest, ChatRole};
 
 use rusqlite::OptionalExtension;
@@ -78,10 +78,7 @@ pub fn list_memories(conn: &rusqlite::Connection) -> rusqlite::Result<Vec<Memory
     rows.collect()
 }
 
-pub fn get_memory(
-    conn: &rusqlite::Connection,
-    memory_id: i64,
-) -> rusqlite::Result<Option<Memory>> {
+pub fn get_memory(conn: &rusqlite::Connection, memory_id: i64) -> rusqlite::Result<Option<Memory>> {
     let mut stmt = conn.prepare(
         "SELECT id, content, source, conversation_id, created_at, updated_at
          FROM memories WHERE id = ?1",
@@ -164,11 +161,8 @@ pub async fn delete_memory(db: &Db, memory_id: i64) -> Result<(), String> {
     if conn.changes() == 0 {
         return Err("Memory not found".to_string());
     }
-    conn.execute(
-        "DELETE FROM memories_vec WHERE memory_id = ?1",
-        [memory_id],
-    )
-    .map_err(|err| err.to_string())?;
+    conn.execute("DELETE FROM memories_vec WHERE memory_id = ?1", [memory_id])
+        .map_err(|err| err.to_string())?;
     Ok(())
 }
 
@@ -180,7 +174,7 @@ pub fn is_incognito(conn: &rusqlite::Connection, conversation_id: i64) -> bool {
         |row| row.get::<_, i64>(0),
     )
     .map(|v| v != 0)
-        .unwrap_or(false)
+    .unwrap_or(false)
 }
 
 /// The last user/ assistant exchange of a conversation (the distillation
@@ -194,9 +188,7 @@ fn last_exchange(
          WHERE conversation_id = ?1 ORDER BY id DESC LIMIT 4",
     )?;
     let recent: Vec<(String, String)> = stmt
-        .query_map([conversation_id], |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?
+        .query_map([conversation_id], |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<Result<_, _>>()?;
 
     // Streams persist the assistant replying to the last user message: the
@@ -207,7 +199,10 @@ fn last_exchange(
     let Some((_, assistant_content)) = assistant else {
         return Ok(None);
     };
-    let assistant_pos = recent.iter().position(|x| x.1 == *assistant_content).unwrap();
+    let assistant_pos = recent
+        .iter()
+        .position(|x| x.1 == *assistant_content)
+        .unwrap();
     let user = recent[assistant_pos..]
         .iter()
         .find(|(role, _)| role == "USER")
@@ -273,7 +268,10 @@ pub async fn distill_conversation(
 
     // The provider abstraction streams; a distillation needs the whole
     // reply, so drain the stream.
-    let mut stream = provider.stream_chat(request).await.map_err(|err: ProviderError| err.to_string())?;
+    let mut stream = provider
+        .stream_chat(request)
+        .await
+        .map_err(|err: ProviderError| err.to_string())?;
     let mut reply = String::new();
     use futures_util::StreamExt;
     while let Some(chunk) = stream.next().await {
@@ -286,9 +284,15 @@ pub async fn distill_conversation(
     let proposals = parse_memories(&reply);
     let mut written = 0;
     for content in proposals {
-        if write_memory(db, embedder, &content, MemorySource::Distilled, Some(conversation_id))
-            .await
-            .is_ok()
+        if write_memory(
+            db,
+            embedder,
+            &content,
+            MemorySource::Distilled,
+            Some(conversation_id),
+        )
+        .await
+        .is_ok()
         {
             written += 1;
         }
@@ -304,14 +308,17 @@ mod tests {
     use std::sync::Arc;
 
     use crate::embeddings::FakeEmbedder;
-use crate::provider::OpenAiCompatProvider;
+    use crate::provider::OpenAiCompatProvider;
 
     #[test]
     fn parse_memories_takes_only_prefixed_lines() {
         let reply = "Sure, here is what I noted:\nMEMORY: user prefers terse answers\n\
                      noise line\nMEMORY:   \nMEMORY: works in Berlin\nMEMORY: too much\n";
         let parsed = parse_memories(reply);
-        assert_eq!(parsed, vec!["user prefers terse answers", "works in Berlin"]);
+        assert_eq!(
+            parsed,
+            vec!["user prefers terse answers", "works in Berlin"]
+        );
     }
 
     #[test]
@@ -344,7 +351,8 @@ use crate::provider::OpenAiCompatProvider;
                     )),
                     Bytes::from("data: [DONE]\n\n"),
                 ];
-                let body = futures_util::stream::iter(frames.into_iter().map(Ok::<_, std::io::Error>));
+                let body =
+                    futures_util::stream::iter(frames.into_iter().map(Ok::<_, std::io::Error>));
                 (
                     [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
                     axum::body::Body::from_stream(body),
@@ -388,11 +396,13 @@ use crate::provider::OpenAiCompatProvider;
             seed_exchange(&conn, 3, false);
         }
 
-        let base_url =
-            spawn_memories_mock_provider("MEMORY: user reports March commute exhaustion\nMEMORY: wants help planning the month")
-                .await;
+        let base_url = spawn_memories_mock_provider(
+            "MEMORY: user reports March commute exhaustion\nMEMORY: wants help planning the month",
+        )
+        .await;
         let provider =
-            OpenAiCompatProvider::from_settings(Some(base_url), None, Some("mock".to_string())).unwrap();
+            OpenAiCompatProvider::from_settings(Some(base_url), None, Some("mock".to_string()))
+                .unwrap();
         let embedder: Arc<dyn Embedder> = Arc::new(FakeEmbedder::new(|text| {
             vec![text.len() as f32; crate::db::EMBEDDING_DIM]
         }));
@@ -421,15 +431,15 @@ use crate::provider::OpenAiCompatProvider;
         let db = crate::db::init(dir.path()).unwrap();
         {
             let conn = db.get().unwrap();
-seed_exchange(&conn, 4, true);
+            seed_exchange(&conn, 4, true);
         }
 
-        let base_url =
-            spawn_memories_mock_provider("MEMORY: should never be written").await;
-        let provider = OpenAiCompatProvider::from_settings(Some(base_url), None, Some("mock".to_string())).unwrap();
-        let embedder: Arc<dyn Embedder> = Arc::new(FakeEmbedder::new(|_| {
-            vec![1.0; crate::db::EMBEDDING_DIM]
-        }));
+        let base_url = spawn_memories_mock_provider("MEMORY: should never be written").await;
+        let provider =
+            OpenAiCompatProvider::from_settings(Some(base_url), None, Some("mock".to_string()))
+                .unwrap();
+        let embedder: Arc<dyn Embedder> =
+            Arc::new(FakeEmbedder::new(|_| vec![1.0; crate::db::EMBEDDING_DIM]));
 
         let written = distill_conversation(&db, embedder.as_ref(), &provider, 4)
             .await

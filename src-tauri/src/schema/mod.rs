@@ -19,8 +19,8 @@ mod tests;
 mod tests_support;
 
 pub use chat::{
-    ConversationMessageChunk, FirstChunkTimeout, GqlConversation, GqlMessage,
-    MessageRole, Subscription,
+    ConversationMessageChunk, FirstChunkTimeout, GqlConversation, GqlMessage, MessageRole,
+    Subscription,
 };
 pub use files::{GqlFileStatus, GqlFileType, GqlFileUpload};
 pub use memories::{GqlMemory, GqlMemorySource, GqlSearchResult};

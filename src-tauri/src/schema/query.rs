@@ -38,9 +38,8 @@ impl Query {
         let db = ctx.data::<Db>()?;
         let conn = db.get()?;
 
-        let mut stmt = conn.prepare(
-            "SELECT id, title, archived, project_id FROM conversations ORDER BY id ASC",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT id, title, archived, project_id FROM conversations ORDER BY id ASC")?;
         let rows = stmt
             .query_map([], |row| {
                 Ok(GqlConversation {

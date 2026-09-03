@@ -577,7 +577,9 @@ impl Mutation {
         let conn = match db.get() {
             Ok(conn) => conn,
             Err(err) => {
-                return MutationUpdateProjectInstructionsResult::Error(GqlError::new(err.to_string()))
+                return MutationUpdateProjectInstructionsResult::Error(GqlError::new(
+                    err.to_string(),
+                ))
             }
         };
 
@@ -589,10 +591,14 @@ impl Mutation {
             "UPDATE projects SET instructions = ?1, updated_at = ?2 WHERE id = ?3",
             rusqlite::params![instructions, chrono::Utc::now().to_rfc3339(), project_id],
         ) {
-            Ok(_) => MutationUpdateProjectInstructionsResult::MutationUpdateProjectInstructionsSuccess(
-                MutationUpdateProjectInstructionsSuccess { data: true },
-            ),
-            Err(err) => MutationUpdateProjectInstructionsResult::Error(GqlError::new(err.to_string())),
+            Ok(_) => {
+                MutationUpdateProjectInstructionsResult::MutationUpdateProjectInstructionsSuccess(
+                    MutationUpdateProjectInstructionsSuccess { data: true },
+                )
+            }
+            Err(err) => {
+                MutationUpdateProjectInstructionsResult::Error(GqlError::new(err.to_string()))
+            }
         }
     }
 
@@ -702,16 +708,16 @@ impl Mutation {
             Ok(id) => {
                 let conn = match db.get() {
                     Ok(conn) => conn,
-                    Err(err) => return MutationCreateMemoryResult::Error(GqlError::new(err.to_string())),
+                    Err(err) => {
+                        return MutationCreateMemoryResult::Error(GqlError::new(err.to_string()))
+                    }
                 };
                 match crate::memories::get_memory(&conn, id) {
-                    Ok(Some(memory)) => {
-                        MutationCreateMemoryResult::MutationCreateMemorySuccess(
-                            MutationCreateMemorySuccess {
-                                data: GqlMemory::from(memory),
-                            },
-                        )
-                    }
+                    Ok(Some(memory)) => MutationCreateMemoryResult::MutationCreateMemorySuccess(
+                        MutationCreateMemorySuccess {
+                            data: GqlMemory::from(memory),
+                        },
+                    ),
                     _ => MutationCreateMemoryResult::Error(GqlError::new("memory vanished")),
                 }
             }
@@ -742,11 +748,7 @@ impl Mutation {
         }
     }
 
-    async fn delete_memory(
-        &self,
-        ctx: &Context<'_>,
-        memory_id: i64,
-    ) -> MutationDeleteMemoryResult {
+    async fn delete_memory(&self, ctx: &Context<'_>, memory_id: i64) -> MutationDeleteMemoryResult {
         let db = match ctx.data::<Db>() {
             Ok(db) => db,
             Err(err) => return MutationDeleteMemoryResult::Error(GqlError::new(err.message)),

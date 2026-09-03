@@ -1,7 +1,7 @@
 //! File upload types: the GraphQL shape of an upload row (id, name,
 //! type, status, createdAt), enums FileType/FileStatus.
 
-use async_graphql::{Enum, ID, Object};
+use async_graphql::{Enum, Object, ID};
 
 use crate::files::FileRow;
 

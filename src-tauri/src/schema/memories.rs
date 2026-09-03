@@ -2,7 +2,7 @@
 //! and deletable — no hidden profiling), the per-chat incognito switch, and
 //! the transcript search backend (tool-loop exposure lands in 0004).
 
-use async_graphql::{Enum, ID, InputObject, SimpleObject, Union};
+use async_graphql::{Enum, InputObject, SimpleObject, Union, ID};
 
 use crate::memories::MemorySource;
 use crate::retrieval::SearchHit;

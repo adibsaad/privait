@@ -28,14 +28,10 @@ pub struct WorkerDeps {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AppJob {
     /// Fallback path for the inline upload pipeline.
-    ProcessFile {
-        file_id: i64,
-    },
+    ProcessFile { file_id: i64 },
     /// Post-chat memory distillation: proposes memories from the
     /// conversation's last exchange.
-    DistillMemory {
-        conversation_id: i64,
-    },
+    DistillMemory { conversation_id: i64 },
 }
 
 type Storage_ = apalis_sqlite::SqliteStorage<
@@ -151,8 +147,13 @@ async fn run_distillation(deps: &WorkerDeps, conversation_id: i64) -> Result<(),
         },
     )
     .ok_or_else(|| "provider not configured".to_string())?;
-    crate::memories::distill_conversation(&deps.db, deps.embedder.as_ref(), &provider, conversation_id)
-        .await?;
+    crate::memories::distill_conversation(
+        &deps.db,
+        deps.embedder.as_ref(),
+        &provider,
+        conversation_id,
+    )
+    .await?;
     Ok(())
 }
 
@@ -187,7 +188,9 @@ mod tests {
             .run();
         tokio::spawn(worker);
 
-        jobs.push_job(AppJob::ProcessFile { file_id: 42 }).await.unwrap();
+        jobs.push_job(AppJob::ProcessFile { file_id: 42 })
+            .await
+            .unwrap();
 
         for _ in 0..50 {
             if processed.load(Ordering::SeqCst) {

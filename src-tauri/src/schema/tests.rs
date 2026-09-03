@@ -5,11 +5,9 @@ pub(crate) mod chat_tests {
     use super::super::chat::*;
     use super::super::tests_support::*;
     use crate::schema::*;
-    use std::time::Duration;
-    use serde_json::json;
     use futures_util::StreamExt;
-    
-    
+    use serde_json::json;
+    use std::time::Duration;
 
     #[tokio::test]
     async fn subscription_fails_loudly_when_the_provider_never_responds() {
@@ -279,7 +277,8 @@ pub(crate) mod chat_tests {
 
         // A second send on the same conversation is rejected before any
         // message rows are written.
-        let mut second = schema.execute_stream(subscription_request(Some(conversation_id), "again"));
+        let mut second =
+            schema.execute_stream(subscription_request(Some(conversation_id), "again"));
         let rejected = second.next().await.unwrap();
         let payload = payload_item(rejected);
         assert_eq!(payload["conversation"]["__typename"], json!("Error"));
@@ -345,7 +344,8 @@ pub(crate) mod chat_tests {
 
         // Slot freed: nothing in flight anymore, and a follow-up send works.
         assert!(!execute_stop_run(&schema, conversation_id).await);
-        let mut second = schema.execute_stream(subscription_request(Some(conversation_id), "again"));
+        let mut second =
+            schema.execute_stream(subscription_request(Some(conversation_id), "again"));
         let response = second.next().await.unwrap();
         assert_eq!(
             payload_item(response)["conversation"]["__typename"],
@@ -378,9 +378,11 @@ pub(crate) mod chat_tests {
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         loop {
             let assistants: i64 = conn
-                .query_row("SELECT COUNT(*) FROM messages WHERE role = 'ASSISTANT'", [], |row| {
-                    row.get(0)
-                })
+                .query_row(
+                    "SELECT COUNT(*) FROM messages WHERE role = 'ASSISTANT'",
+                    [],
+                    |row| row.get(0),
+                )
                 .unwrap();
             if assistants == 0 {
                 break;
@@ -393,9 +395,11 @@ pub(crate) mod chat_tests {
         }
         // The user message survives the stop.
         let users: i64 = conn
-            .query_row("SELECT COUNT(*) FROM messages WHERE role = 'USER'", [], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE role = 'USER'",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(users, 1);
     }
@@ -910,17 +914,14 @@ pub(crate) mod chat_tests {
             assert_eq!(owner, message_one);
         }
     }
-
 }
 
 pub(crate) mod query_tests {
-    
+
     use super::super::tests_support::*;
     use crate::schema::*;
-    
+
     use serde_json::json;
-    
-    
 
     #[tokio::test]
     async fn conversation_queries_return_created_rows() {
@@ -1024,22 +1025,21 @@ pub(crate) mod query_tests {
         assert_eq!(files[0]["type"], json!("TEXT"));
         assert_eq!(files[1]["originalName"], json!("second.txt"));
     }
-
 }
 
 pub(crate) mod mutation_tests {
-    
+
     use super::super::tests_support::*;
     use crate::schema::*;
     use std::sync::Arc;
-    
-    use serde_json::json;
+
     use futures_util::StreamExt;
-    
+    use serde_json::json;
+
     use tower::ServiceExt;
-    
-    use rusqlite::params;
+
     use crate::db::{self};
+    use rusqlite::params;
 
     #[tokio::test]
     async fn delete_conversation_mutation_removes_rows() {
@@ -1679,14 +1679,14 @@ pub(crate) mod mutation_tests {
             .into_result()
             .unwrap();
         let create = serde_json::to_value(&response.data).unwrap()["createProject"].clone();
-        assert_eq!(create["__typename"], json!("MutationCreateProjectSuccess"), "{create:?}");
+        assert_eq!(
+            create["__typename"],
+            json!("MutationCreateProjectSuccess"),
+            "{create:?}"
+        );
         assert_eq!(create["data"]["name"], json!("Thesis"));
         assert_eq!(create["data"]["instructions"], json!("Be terse."));
-        let project_id: i64 = create["data"]["id"]
-            .as_str()
-            .unwrap()
-            .parse()
-            .unwrap();
+        let project_id: i64 = create["data"]["id"].as_str().unwrap().parse().unwrap();
 
         // Read.
         let response = schema
@@ -1717,12 +1717,15 @@ pub(crate) mod mutation_tests {
             .into_result()
             .unwrap();
         assert_eq!(
-            serde_json::to_value(&response.data).unwrap()["updateProjectInstructions"]["__typename"],
+            serde_json::to_value(&response.data).unwrap()["updateProjectInstructions"]
+                ["__typename"],
             json!("MutationUpdateProjectInstructionsSuccess")
         );
 
         let response = schema
-            .execute(format!("query {{ project(projectId: {project_id}) {{ name instructions }} }}"))
+            .execute(format!(
+                "query {{ project(projectId: {project_id}) {{ name instructions }} }}"
+            ))
             .await
             .into_result()
             .unwrap();
@@ -1782,7 +1785,9 @@ pub(crate) mod mutation_tests {
 
         // Missing project is a clean error on every mutation path.
         let response = schema
-            .execute("mutation { deleteProject(projectId: 99) { __typename ... on Error { message } } }")
+            .execute(
+                "mutation { deleteProject(projectId: 99) { __typename ... on Error { message } } }",
+            )
             .await
             .into_result()
             .unwrap();
@@ -1864,7 +1869,9 @@ pub(crate) mod mutation_tests {
 
         // Idempotent: a second claim pass changes nothing.
         let response = schema
-            .execute("mutation { addProjectKnowledge(projectId: 1, fileIds: [10, 11]) { __typename } }")
+            .execute(
+                "mutation { addProjectKnowledge(projectId: 1, fileIds: [10, 11]) { __typename } }",
+            )
             .await
             .into_result()
             .unwrap();
@@ -1886,8 +1893,15 @@ pub(crate) mod mutation_tests {
             .into_result()
             .unwrap();
         let created = serde_json::to_value(&response.data).unwrap()["createMemory"].clone();
-        assert_eq!(created["__typename"], json!("MutationCreateMemorySuccess"), "{created:?}");
-        assert_eq!(created["data"]["content"], json!("User plans to run a 10k in May"));
+        assert_eq!(
+            created["__typename"],
+            json!("MutationCreateMemorySuccess"),
+            "{created:?}"
+        );
+        assert_eq!(
+            created["data"]["content"],
+            json!("User plans to run a 10k in May")
+        );
         assert_eq!(created["data"]["source"], json!("MANUAL"));
         assert_eq!(created["data"]["conversationId"], json!(null));
         let memory_id: i64 = created["data"]["id"].as_str().unwrap().parse().unwrap();
@@ -1941,7 +1955,9 @@ pub(crate) mod mutation_tests {
 
         // Missing memory / empty content are clean errors.
         let response = schema
-            .execute("mutation { deleteMemory(memoryId: 99) { __typename ... on Error { message } } }")
+            .execute(
+                "mutation { deleteMemory(memoryId: 99) { __typename ... on Error { message } } }",
+            )
             .await
             .into_result()
             .unwrap();
@@ -1963,9 +1979,9 @@ pub(crate) mod mutation_tests {
     #[tokio::test]
     async fn memories_ground_across_chats_with_tunable_threshold() {
         let db = test_db();
-        let embedder: Arc<dyn Embedder> = Arc::new(
-            crate::embeddings::FakeEmbedder::by_keyword(&["march", "other"]),
-        );
+        let embedder: Arc<dyn Embedder> = Arc::new(crate::embeddings::FakeEmbedder::by_keyword(&[
+            "march", "other",
+        ]));
         {
             // Provenance: this memory was distilled in chat 1.
             let conn = db.get().unwrap();
@@ -2002,7 +2018,11 @@ pub(crate) mod mutation_tests {
             let conn = db.get().unwrap();
             seed_provider_settings(&conn, &base_url).await;
         }
-        let schema = upload_context(db.clone(), crate::storage::Storage::memory().unwrap(), embedder);
+        let schema = upload_context(
+            db.clone(),
+            crate::storage::Storage::memory().unwrap(),
+            embedder,
+        );
 
         // The cross-chat ask: a fresh conversation (2) about burnout — the
         // memory distilled in chat 1 grounds it ("March burnout"-style).
@@ -2063,9 +2083,9 @@ pub(crate) mod mutation_tests {
     #[tokio::test]
     async fn incognito_chats_read_no_memories_and_stay_out_of_search() {
         let db = test_db();
-        let embedder: Arc<dyn Embedder> = Arc::new(
-            crate::embeddings::FakeEmbedder::by_keyword(&["march", "other"]),
-        );
+        let embedder: Arc<dyn Embedder> = Arc::new(crate::embeddings::FakeEmbedder::by_keyword(&[
+            "march", "other",
+        ]));
         {
             let conn = db.get().unwrap();
             conn.execute(
@@ -2140,7 +2160,10 @@ pub(crate) mod mutation_tests {
             .into_result()
             .unwrap();
         assert_eq!(
-            serde_json::to_value(&response.data).unwrap()["memories"].as_array().unwrap().len(),
+            serde_json::to_value(&response.data).unwrap()["memories"]
+                .as_array()
+                .unwrap()
+                .len(),
             1,
             "the list itself is unaffected"
         );
@@ -2160,13 +2183,18 @@ pub(crate) mod mutation_tests {
             .iter()
             .map(|h| h["conversationId"].as_i64().unwrap())
             .collect();
-        assert!(!hit_ids.contains(&9), "incognito chat must be invisible: {hit_ids:?}");
+        assert!(
+            !hit_ids.contains(&9),
+            "incognito chat must be invisible: {hit_ids:?}"
+        );
         assert!(hit_ids.contains(&10));
 
         // Project scope: chat 10 has no project, so the default scope (its
         // "project" = whole vault minus incognito) still excludes chat 9.
         let response = schema
-            .execute("query { searchHistory(query: \"march\", conversationId: 10) { conversationId } }")
+            .execute(
+                "query { searchHistory(query: \"march\", conversationId: 10) { conversationId } }",
+            )
             .await
             .into_result()
             .unwrap();
@@ -2176,5 +2204,4 @@ pub(crate) mod mutation_tests {
             .clone();
         assert!(hits.iter().all(|h| h["conversationId"].as_i64() != Some(9)));
     }
-
 }

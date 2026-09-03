@@ -4,7 +4,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_graphql::{Context, Enum, ID, Object, SimpleObject, Subscription, Union};
+use async_graphql::{Context, Enum, Object, SimpleObject, Subscription, Union, ID};
 use futures_util::StreamExt;
 use rusqlite::{params, Connection, OptionalExtension};
 use tokio_stream::wrappers::ReceiverStream;
@@ -161,7 +161,10 @@ pub(crate) fn conversation_title(prompt: &str) -> String {
     format!("{}…", head[..cut].trim_end())
 }
 
-pub(crate) fn select_messages(conn: &Connection, conversation_id: i64) -> rusqlite::Result<Vec<GqlMessage>> {
+pub(crate) fn select_messages(
+    conn: &Connection,
+    conversation_id: i64,
+) -> rusqlite::Result<Vec<GqlMessage>> {
     // Attachments ride along in one batched query so history re-renders
     // chips after reload.
     let mut files_stmt = conn.prepare(
@@ -646,8 +649,8 @@ impl Subscription {
             let produced_reply = !content.is_empty();
             if let Ok(conn) = chunk_db.get() {
                 if stopped && content.is_empty() {
-                    let _ = conn
-                        .execute("DELETE FROM messages WHERE id = ?1", [assistant_message_id]);
+                    let _ =
+                        conn.execute("DELETE FROM messages WHERE id = ?1", [assistant_message_id]);
                 } else {
                     let _ = conn.execute(
                         "UPDATE messages SET content = ?1 WHERE id = ?2",

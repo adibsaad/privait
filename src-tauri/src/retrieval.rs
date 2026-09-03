@@ -123,9 +123,7 @@ pub fn search_history(
             )
             .ok();
         match project_id {
-            Some(project_id) => format!(
-                "WHERE c.incognito = 0 AND c.project_id = {project_id}"
-            ),
+            Some(project_id) => format!("WHERE c.incognito = 0 AND c.project_id = {project_id}"),
             None => "WHERE c.incognito = 0".to_string(),
         }
     };
@@ -158,7 +156,10 @@ pub fn search_history(
 /// Wraps the query in phrase quotes so punctuation doesn't read as FTS
 /// syntax; a quirk-free search beats a clever one.
 fn fts_quote(query: &str) -> String {
-    let cleaned: String = query.chars().map(|c| if c == '"' { ' ' } else { c }).collect();
+    let cleaned: String = query
+        .chars()
+        .map(|c| if c == '"' { ' ' } else { c })
+        .collect();
     format!("\"{}\"", cleaned.trim())
 }
 /// Top-4 file-chunk contents from this conversation's attachments, most
@@ -305,7 +306,6 @@ pub fn conversation_chunks_head(db: &Db, conversation_id: i64) -> Result<Vec<Str
         .map_err(|err| err.to_string())?;
     Ok(rows)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -564,10 +564,7 @@ mod tests {
 
         // Borderline match: similarity exactly 0.5 — cleared by the default,
         // silenced by anything higher.
-        seed_memories(
-            &pool,
-            &[("borderline", sparse(0.5, 0.75f32.sqrt()))],
-        );
+        seed_memories(&pool, &[("borderline", sparse(0.5, 0.75f32.sqrt()))]);
 
         let input = RetrievalInput {
             db: &pool,
@@ -657,20 +654,14 @@ mod tests {
 
         // Project-scoped by default: the asking chat's project only.
         let hits = search_history(&pool, "march", 1, false).unwrap();
-        let conversation_ids: Vec<i64> = hits
-            .iter()
-            .map(|hit| hit.conversation_id)
-            .collect();
+        let conversation_ids: Vec<i64> = hits.iter().map(|hit| hit.conversation_id).collect();
         assert_eq!(conversation_ids.len(), 2);
         assert!(conversation_ids.contains(&1));
         assert!(conversation_ids.contains(&2));
 
         // Whole vault: everything except the incognito chat.
         let hits = search_history(&pool, "march", 1, true).unwrap();
-        let conversation_ids: Vec<i64> = hits
-            .iter()
-            .map(|hit| hit.conversation_id)
-            .collect();
+        let conversation_ids: Vec<i64> = hits.iter().map(|hit| hit.conversation_id).collect();
         assert_eq!(conversation_ids.len(), 4);
         assert!(!conversation_ids.contains(&5));
 

@@ -175,9 +175,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
 /// exactly as it was — no partial DDL, version unadvanced, retryable at the
 /// next startup.
 fn apply_migration(conn: &Connection, sql: &str, target: i64) -> rusqlite::Result<()> {
-    let wrapped = format!(
-        "BEGIN;\n{sql}\nPRAGMA user_version = {target};\nCOMMIT;"
-    );
+    let wrapped = format!("BEGIN;\n{sql}\nPRAGMA user_version = {target};\nCOMMIT;");
     if let Err(err) = conn.execute_batch(&wrapped) {
         // The failed batch leaves its transaction open on this connection —
         // roll it back before surfacing the error.
