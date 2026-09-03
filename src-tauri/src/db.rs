@@ -206,6 +206,19 @@ pub fn set_setting(conn: &Connection, key: &str, value: &str) -> rusqlite::Resul
     Ok(())
 }
 
+/// Removes each conversation's trailing empty assistant row — a run killed
+/// between the placeholder insert and its first incremental flush leaves
+/// exactly that behind. Runs at startup, next to the orphan-upload sweep.
+pub fn sweep_trailing_empty_assistants(conn: &Connection) -> rusqlite::Result<usize> {
+    conn.execute(
+        "DELETE FROM messages
+         WHERE role = 'ASSISTANT' AND content = ''
+           AND id IN (SELECT MAX(id) FROM messages GROUP BY conversation_id)",
+        [],
+    )?;
+    Ok(conn.changes() as usize)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

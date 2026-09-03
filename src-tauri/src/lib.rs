@@ -71,11 +71,20 @@ pub fn run() {
 
             // Uploads happen on send; anything stored but never attached to a
             // message is a dead end (aborted send) — sweep it at startup.
+            // A run killed mid-stream leaves a trailing empty assistant row
+            // behind (its partials lived in memory) — sweep that too.
             {
                 let db = db.clone();
                 let storage = storage.clone();
                 tauri::async_runtime::spawn(async move {
                     files::gc_orphan_uploads(&db, &storage).await;
+                    if let Ok(conn) = db.get() {
+                        match db::sweep_trailing_empty_assistants(&conn) {
+                            Ok(0) => {}
+                            Ok(n) => println!("Swept {n} empty assistant row(s)"),
+                            Err(err) => eprintln!("empty-assistant sweep failed: {err}"),
+                        }
+                    }
                 });
             }
 

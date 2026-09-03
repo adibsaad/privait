@@ -521,6 +521,12 @@ impl Subscription {
             let mut accumulated = String::new();
             let mut failed = false;
             let mut stopped = false;
+            // Incremental persistence: flush the partial reply to the
+            // assistant row while streaming, so a killed process (Cmd+Q)
+            // keeps everything generated up to the last flush. The final
+            // write at the end of the pump stays the source of truth.
+            let mut last_flush = tokio::time::Instant::now();
+            const FLUSH_INTERVAL: Duration = Duration::from_millis(500);
 
             // Connection, response headers, and the first chunk share one
             // budget: a provider that stalls anywhere before streaming must
@@ -608,6 +614,16 @@ impl Subscription {
                                 break;
                             }
                             accumulated.push_str(&chunk);
+
+                            if last_flush.elapsed() >= FLUSH_INTERVAL {
+                                if let Ok(conn) = chunk_db.get() {
+                                    let _ = conn.execute(
+                                        "UPDATE messages SET content = ?1 WHERE id = ?2",
+                                        params![accumulated, assistant_message_id],
+                                    );
+                                }
+                                last_flush = tokio::time::Instant::now();
+                            }
                         }
                         Some(Err(err)) => {
                             let _ = tx

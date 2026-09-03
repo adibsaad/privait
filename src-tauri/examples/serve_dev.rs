@@ -38,9 +38,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let embedder: Arc<dyn embeddings::Embedder> =
         Arc::new(embeddings::FastEmbedder::new(data_dir.join("models")));
 
-    // Same startup sweep the app runs: uploads happen on send, so stored-
-    // but-never-attached files are dead ends.
+    // Same startup sweeps the app runs: uploads happen on send, so stored-
+    // but-never-attached files are dead ends; a run killed mid-stream leaves
+    // a trailing empty assistant row.
     files::gc_orphan_uploads(&db, &file_storage).await;
+    {
+        let conn = db.get()?;
+        match db::sweep_trailing_empty_assistants(&conn) {
+            Ok(0) => {}
+            Ok(n) => println!("Swept {n} empty assistant row(s)"),
+            Err(err) => eprintln!("empty-assistant sweep failed: {err}"),
+        }
+    }
 
     tokio::spawn(jobs::run_worker(
         jobs.clone(),

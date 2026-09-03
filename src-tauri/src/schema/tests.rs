@@ -257,6 +257,79 @@ pub(crate) mod chat_tests {
     }
 
     #[tokio::test]
+    async fn partial_reply_flushes_incrementally_while_streaming() {
+        let db = test_db();
+        {
+            let conn = db.get().unwrap();
+            // Three chunks, 700ms apart: the throttle (500ms) must have
+            // flushed twice by the time the third chunk lands.
+            let base_url = spawn_mock_provider(vec!["one ", "two ", "three"], 700).await;
+            seed_provider_settings(&conn, &base_url).await;
+        }
+
+        let schema = schema_with(db.clone());
+        let mut stream = schema.execute_stream(subscription_request(None, "hi"));
+
+        // First chunk arrives; the stream is still open after this.
+        let first = stream.next().await.unwrap();
+        let payload = payload_item(first);
+        assert_eq!(
+            payload["conversation"]["data"]["messageChunk"].as_str(),
+            Some("one ")
+        );
+
+        // While the stream is open (second chunk due at +700ms), the first
+        // flush must already be visible in the database — a quit mid-stream
+        // keeps everything generated so far.
+        let conn = db.get().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let persisted = loop {
+            let content: Option<String> = conn
+                .query_row(
+                    "SELECT content FROM messages WHERE role = 'ASSISTANT' LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            if content.as_deref() == Some("one ") {
+                break content.unwrap();
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "incremental flush did not land while streaming: {content:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        assert_eq!(persisted, "one ");
+
+        // Keep consuming: the pump's final write stays the source of truth
+        // (the whole reply, exactly once).
+        while let Some(response) = stream.next().await {
+            if payload_item(response)["conversation"]["data"]["done"].as_bool() == Some(true) {
+                break;
+            }
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let content: Option<String> = conn
+                .query_row(
+                    "SELECT content FROM messages WHERE role = 'ASSISTANT' LIMIT 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            if content.as_deref() == Some("one two three") {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "final content wrong after stream end: {content:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    #[tokio::test]
     async fn second_send_while_streaming_is_rejected_and_the_slot_is_freed_after() {
         let db = test_db();
         {
