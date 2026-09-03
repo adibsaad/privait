@@ -1,13 +1,18 @@
 //! Chat grounding: nearest-neighbor retrieval over stored memories and
 //! processed file chunks — the desktop port of `src/server/llm/query-embedding.ts`.
-//! KNN top-4 per source with an app-side similarity filter (≥ 0.5, cosine);
-//! vec0 does not accept `distance` as a WHERE filter, so the threshold is
-//! applied to the returned rows (pinned by a db.rs test).
+//! KNN top-4 per source; the similarity threshold (≥ 0.5 cosine) is enforced
+//! in SQL — vec0's query planner leaves `distance` constraints unconsumed, so
+//! SQLite applies them per-row on the KNN stream (pinned by a db.rs test).
+//! Conversation scoping stays app-side: a JOIN defeats vec0's fast KNN path.
 
 use crate::db::{self, Db, EMBEDDING_DIM};
 
 pub const RETRIEVAL_LIMIT: usize = 4;
 pub const MIN_SIMILARITY: f64 = 0.5;
+/// Largest cosine distance that still counts as a match — inclusive edge,
+/// same tolerance as the old app-side filter
+/// (`1.0 - distance >= MIN_SIMILARITY - ε` ⇔ `distance <= MAX_DISTANCE`).
+pub const MAX_DISTANCE: f64 = 1.0 - MIN_SIMILARITY + f64::EPSILON;
 
 pub struct RetrievalInput<'a> {
     pub db: &'a Db,
@@ -27,15 +32,15 @@ pub fn related_memories(input: &RetrievalInput<'_>) -> Result<Vec<String>, Strin
     let query_blob = db::embedding_to_blob(input.query_embedding);
     let mut stmt = conn
         .prepare(
-            "SELECT content, distance FROM memories
-             WHERE embedding MATCH ?1 ORDER BY distance LIMIT ?2",
+            "SELECT content FROM memories
+             WHERE embedding MATCH ?1 AND distance <= ?2 ORDER BY distance LIMIT ?3",
         )
         .map_err(|err| err.to_string())?;
-    let rows = knn_rows(
+    let rows = knn_contents(
         &mut stmt,
-        rusqlite::params![query_blob, RETRIEVAL_LIMIT as i64],
+        rusqlite::params![query_blob, MAX_DISTANCE, RETRIEVAL_LIMIT as i64],
     )?;
-    Ok(above_threshold(rows))
+    Ok(rows)
 }
 /// Top-4 file-chunk contents from this conversation's attachments, most
 /// similar first.
@@ -44,7 +49,8 @@ pub fn related_memories(input: &RetrievalInput<'_>) -> Result<Vec<String>, Strin
 /// it reject both parameterized and literal LIMITs), so this runs KNN over
 /// all chunks and filters to the conversation app-side — bounded by a
 /// desktop-scale corpus, and exactly correct (a distant chunk from another
-/// chat can't crowd out a close one from this chat).
+/// chat can't crowd out a close one from this chat). The similarity
+/// threshold lives in SQL (see the module docs).
 pub fn related_file_chunks(input: &RetrievalInput<'_>) -> Result<Vec<String>, String> {
     if input.query_embedding.len() != EMBEDDING_DIM {
         return Ok(Vec::new());
@@ -82,29 +88,22 @@ pub fn related_file_chunks(input: &RetrievalInput<'_>) -> Result<Vec<String>, St
     let query_blob = db::embedding_to_blob(input.query_embedding);
     let mut stmt = conn
         .prepare(&format!(
-            "SELECT rowid, file_id, distance FROM file_chunks
-             WHERE embedding MATCH ?1 ORDER BY distance LIMIT {total}"
+            "SELECT rowid, file_id FROM file_chunks
+             WHERE embedding MATCH ?1 AND distance <= ?2 ORDER BY distance LIMIT {total}"
         ))
         .map_err(|err| err.to_string())?;
-    let knn = stmt
-        .query_map([query_blob], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, f64>(2)?,
-            ))
+    let knn: Vec<(i64, i64)> = stmt
+        .query_map(rusqlite::params![query_blob, MAX_DISTANCE], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
         })
         .map_err(|err| err.to_string())?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| err.to_string())?;
 
     knn.into_iter()
-        .filter(|(_, file_id, distance)| {
-            conversation_file_ids.contains(file_id)
-                && 1.0 - distance >= MIN_SIMILARITY - f64::EPSILON
-        })
+        .filter(|(_, file_id)| conversation_file_ids.contains(file_id))
         .take(RETRIEVAL_LIMIT)
-        .map(|(rowid, _, _)| chunk_content(&conn, rowid))
+        .map(|(rowid, _)| chunk_content(&conn, rowid))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| err.to_string())
 }
@@ -140,25 +139,14 @@ pub fn conversation_chunks_head(db: &Db, conversation_id: i64) -> Result<Vec<Str
     Ok(rows)
 }
 
-fn knn_rows(
+fn knn_contents(
     stmt: &mut rusqlite::Statement<'_>,
     params: impl rusqlite::Params,
-) -> Result<Vec<(String, f64)>, String> {
-    stmt.query_map(params, |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
-    })
-    .map_err(|err| err.to_string())?
-    .collect::<Result<Vec<_>, _>>()
-    .map_err(|err| err.to_string())
-}
-
-/// vec0 does not accept `distance` as a WHERE filter, so the ≥ 0.5 threshold
-/// is applied to the returned rows app-side (pinned by tests).
-fn above_threshold(rows: Vec<(String, f64)>) -> Vec<String> {
-    rows.into_iter()
-        .filter(|(_, distance)| 1.0 - *distance >= MIN_SIMILARITY - f64::EPSILON)
-        .map(|(content, _)| content)
-        .collect()
+) -> Result<Vec<String>, String> {
+    stmt.query_map(params, |row| row.get::<_, String>(0))
+        .map_err(|err| err.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| err.to_string())
 }
 
 #[cfg(test)]
@@ -247,6 +235,72 @@ mod tests {
 
         // "weak" (similarity ~0.316) and "orthogonal" (0.0) fall below 0.5.
         assert_eq!(memories, vec!["exact".to_string(), "near".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn similarity_at_the_threshold_boundary_is_included() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pool = crate::db::init(dir.path()).unwrap();
+
+        // "borderline" sits exactly at similarity 0.5 (60°) — the inclusive
+        // edge MAX_DISTANCE's epsilon tolerance protects.
+        seed_memories(
+            &pool,
+            &[
+                ("exact", sparse(1.0, 0.0)),
+                ("borderline", sparse(0.5, 0.75f32.sqrt())),
+                ("orthogonal", sparse(0.0, 1.0)),
+            ],
+        );
+
+        let input = RetrievalInput {
+            db: &pool,
+            query_embedding: &sparse(1.0, 0.0),
+            conversation_id: 1,
+        };
+        let memories = related_memories(&input).unwrap();
+
+        assert_eq!(
+            memories,
+            vec!["exact".to_string(), "borderline".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn caps_at_four_most_similar_when_more_pass() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pool = crate::db::init(dir.path()).unwrap();
+
+        // Five rows clear the threshold; the LIMIT-consumed k must reach the
+        // first four and stop there ("fifth" passes but doesn't fit).
+        seed_memories(
+            &pool,
+            &[
+                ("first", sparse(1.0, 0.0)),
+                ("second", sparse(0.9, 0.1)),
+                ("third", sparse(0.8, 0.2)),
+                ("fourth", sparse(0.7, 0.3)),
+                ("fifth", sparse(0.6, 0.4)),
+                ("weak", sparse(0.3, 0.9)),
+            ],
+        );
+
+        let input = RetrievalInput {
+            db: &pool,
+            query_embedding: &sparse(1.0, 0.0),
+            conversation_id: 1,
+        };
+        let memories = related_memories(&input).unwrap();
+
+        assert_eq!(
+            memories,
+            vec![
+                "first".to_string(),
+                "second".to_string(),
+                "third".to_string(),
+                "fourth".to_string()
+            ]
+        );
     }
 
     #[tokio::test]

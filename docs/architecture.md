@@ -234,20 +234,20 @@ sequenceDiagram
 
 ## Design decisions and why
 
-| Decision                                             | Why                                                                                                                                                                                                                    |
-| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Keep the GraphQL API between UI and engine           | The React data layer (Apollo) survives unchanged; Tauri's native command/event IPC would have rewritten it all for little gain.                                                                                        |
-| In-process server, localhost + token (not Tauri IPC) | Same API contract as the old web app, plus a hard boundary: nothing else on the machine can call it.                                                                                                                   |
-| WebSocket streaming for replies                      | Native to the engine's GraphQL library; reliable token-by-token streaming into the webview.                                                                                                                            |
-| SQLite + sqlite-vec (vendored)                       | Single-file, rebuildable, zero-config local storage; vector search in the same file. Vendored to avoid a version conflict with the job queue's SQLite stack.                                                           |
-| Two database files (`privait.db` + `jobs.db`)        | The content DB and the queue library use different SQLite stacks; separate files keep them from fighting over one.                                                                                                     |
-| Files behind OpenDAL, stored as plain files          | Vision principle: files outlive the app. Tests use an in-memory backend; future sync is a backend swap.                                                                                                                |
-| apalis job queue (pinned, wrapped)                   | Direct replacement for the old cloud queue with retries/timeouts for free; wrapped in our own module so library churn can't leak. Uploads no longer use it (inline since upload-on-send), it stays for scheduled jobs. |
-| Embeddings local from day one (fastembed, bge-small) | A background pipeline sending your writing anywhere violates privacy-by-default.                                                                                                                                       |
-| OpenAI-compatible provider abstraction               | One client covers cloud providers _and_ local servers (ollama, LM Studio, llama.cpp-server); a native in-process llama.cpp binding lands before RC.                                                                    |
-| Per-chat file grounding, files linked to messages    | Grounding scope matches mental scope ("this chat knows what I attached here"), and per-message links let chips re-render on the exact bubble that carried them.                                                        |
-| Vector search filtered app-side                      | sqlite-vec's fast KNN can't JOIN; the engine searches all chunks and filters to the conversation's files itself — exact and cheap at desktop scale.                                                                    |
-| API keys in the settings table (for now)             | OS keychain storage is planned before release.                                                                                                                                                                         |
+| Decision                                             | Why                                                                                                                                                                                                                                           |
+| ---------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Keep the GraphQL API between UI and engine           | The React data layer (Apollo) survives unchanged; Tauri's native command/event IPC would have rewritten it all for little gain.                                                                                                               |
+| In-process server, localhost + token (not Tauri IPC) | Same API contract as the old web app, plus a hard boundary: nothing else on the machine can call it.                                                                                                                                          |
+| WebSocket streaming for replies                      | Native to the engine's GraphQL library; reliable token-by-token streaming into the webview.                                                                                                                                                   |
+| SQLite + sqlite-vec (vendored)                       | Single-file, rebuildable, zero-config local storage; vector search in the same file. Vendored to avoid a version conflict with the job queue's SQLite stack.                                                                                  |
+| Two database files (`privait.db` + `jobs.db`)        | The content DB and the queue library use different SQLite stacks; separate files keep them from fighting over one.                                                                                                                            |
+| Files behind OpenDAL, stored as plain files          | Vision principle: files outlive the app. Tests use an in-memory backend; future sync is a backend swap.                                                                                                                                       |
+| apalis job queue (pinned, wrapped)                   | Direct replacement for the old cloud queue with retries/timeouts for free; wrapped in our own module so library churn can't leak. Uploads no longer use it (inline since upload-on-send), it stays for scheduled jobs.                        |
+| Embeddings local from day one (fastembed, bge-small) | A background pipeline sending your writing anywhere violates privacy-by-default.                                                                                                                                                              |
+| OpenAI-compatible provider abstraction               | One client covers cloud providers _and_ local servers (ollama, LM Studio, llama.cpp-server); a native in-process llama.cpp binding lands before RC.                                                                                           |
+| Per-chat file grounding, files linked to messages    | Grounding scope matches mental scope ("this chat knows what I attached here"), and per-message links let chips re-render on the exact bubble that carried them.                                                                               |
+| Vector search around vec0's quirks                   | The similarity threshold (≥ 0.5) is enforced in SQL — vec0's planner leaves `distance` constraints to SQLite's per-row filter. Conversation scoping stays app-side because a JOIN defeats vec0's fast KNN — exact and cheap at desktop scale. |
+| API keys in the settings table (for now)             | OS keychain storage is planned before release.                                                                                                                                                                                                |
 
 ## History
 
@@ -266,6 +266,4 @@ service in-process:
 | node-llama-cpp          | local fastembed + OpenAI-compatible provider trait |
 | Email magic-link login  | removed — single user, no login                    |
 
-Build milestones and the working checklist live in
-[../tasks/todo.md](../tasks/todo.md); the old server's code remains in git
-history.
+The old server's code remains in git history.
