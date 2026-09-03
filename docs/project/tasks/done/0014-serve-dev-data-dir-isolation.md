@@ -12,5 +12,5 @@ Browser/API verification through `serve_dev` shares the real app data dir, so te
 
 ## Review
 - `serve_dev` reads `PRIVAIT_DATA_DIR` before opening anything; verified live — isolated boot shows empty conversations/blank settings with its own db/jobs/files, and the real data dir is untouched.
-- Incident that motivated this (0001–0003 verification): `saveSettings` against the real data dir blanked the user's stored API key; lesson recorded in `tasks/lessons.md` — never `saveSettings` against the real dir; inspect settings read-only and never persist placeholders there.
+- Incident that motivated this (0001–0003 verification): `saveSettings` against the real data dir blanked the user's stored API key; lesson recorded in `docs/lessons.md` — never `saveSettings` against the real dir; inspect settings read-only and never persist placeholders there.
 - 110 tests green, clippy `-D warnings` clean, fmt clean (CI-equivalent commands run locally).

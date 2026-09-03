@@ -2,13 +2,13 @@
 
 This repo is written by AI agents. The human directs, reviews architecture and design decisions, and is the only judge of UX. Agents implement. This guide exists so an AI-written codebase stays consistent, auditable, and scalable over time.
 
-Related: [AGENTS.MD](../AGENTS.MD) (working style, always loaded) · [project/agents.md](project/agents.md) (task board rules) · [tasks/lessons.md](../tasks/lessons.md) (live gotcha log).
+Related: [AGENTS.MD](../AGENTS.MD) (working style, always loaded) · [project/agents.md](project/agents.md) (task board rules) · [lessons.md](lessons.md) (live gotcha log).
 
 ## 1. Session start ritual
 
 Do this before writing any code:
 
-1. Read `tasks/lessons.md` — short, and every entry was a real failure.
+1. Read `docs/lessons.md` — short, and every entry was a real failure.
 2. Read your task file in `docs/project/tasks/` plus its `depends_on`.
 3. Check the "Design decisions and why" table in `docs/architecture.md` before doing anything that contradicts one.
 4. Explore with subagents; read only the files you need. Context is budget.
@@ -48,7 +48,7 @@ A task is done when **all** of these hold, not when the code compiles:
 - [ ] Migrations are append-only: never edit an applied migration; verify the old→new path opens and rebuilds
 - [ ] Every acceptance criterion in the task file checked off **with evidence** (test name, build output, or manual check description)
 - [ ] Task file moved `doing/ → done/` with `git mv`; commit message references the id (`[0003]`)
-- [ ] If you got corrected mid-task: lesson captured in `tasks/lessons.md`
+- [ ] If you got corrected mid-task: lesson captured in `docs/lessons.md`
 - [ ] Docs touched by the change are updated in the same commit (architecture table rows, docstrings-of-record)
 
 ## 5. Scope discipline
@@ -69,7 +69,7 @@ A task is done when **all** of these hold, not when the code compiles:
 
 | You learned... | It goes in |
 |---|---|
-| A correction from the user / a thing that bit you | `tasks/lessons.md` (same session, always) |
+| A correction from the user / a thing that bit you | `docs/lessons.md` (same session, always) |
 | A stable, general convention (promoted from lessons) | This guide, §8 |
 | An architecture/design decision and its why | `docs/architecture.md` decisions table |
 | A product direction change | `docs/vision.md` + `docs/roadmap.md` (human approves) |
@@ -83,7 +83,7 @@ Docs are the org memory between fresh agent sessions. An agent that fixes docs *
 - shadcn was installed with `cssVariables: false` — token classes (`bg-muted` etc.) resolve to nothing unless mapped in `tailwind.config.js` + `index.css` HSL vars.
 - Axum layer order is load-bearing: CORS sits OUTSIDE auth middleware. After router refactors, test preflight against the real `build_router`.
 - vitest: `pnpm exec vitest run` — plain `pnpm test` hangs in watch mode.
-- vec0 quirks: distance constraints enforced per-row by SQLite; `LIMIT n` caps KNN reach — use big `k` for full-corpus queries; keep f32 tolerance on thresholds. (Details in `tasks/lessons.md`.)
+- vec0 quirks: distance constraints enforced per-row by SQLite; `LIMIT n` caps KNN reach — use big `k` for full-corpus queries; keep f32 tolerance on thresholds. (Details in `docs/lessons.md`.)
 - pnpm only (`packageManager` pins the version). No npm/yarn lockfiles.
 
 ## 9. Code design conventions
