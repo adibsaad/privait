@@ -7,6 +7,7 @@ import {
   ArchiveIcon,
   EyeOffIcon,
   FolderIcon,
+  LoaderCircleIcon,
   MoreHorizontalIcon,
   PlusIcon,
   TrashIcon,
@@ -231,8 +232,9 @@ const ThreadRow: FC<{ thread: Thread; indent?: boolean }> = ({
   indent = false,
 }) => {
   const { currentThreadId } = useThreadContext()
-  const actions = useThreadActions()
+  const { runningThreadIds, ...actions } = useThreadActions()
   const active = currentThreadId === thread.id
+  const generating = runningThreadIds.has(thread.id)
   const [incognito, setIncognito] = useState(false)
   const [setIncognitoState] = useMutation(SetConversationIncognitoDocument)
 
@@ -259,10 +261,16 @@ const ThreadRow: FC<{ thread: Thread; indent?: boolean }> = ({
       <button
         type="button"
         onClick={() => actions.switchTo(thread.id)}
-        className={`flex h-full min-w-0 flex-1 items-center text-start text-sm ${
+        className={`flex h-full min-w-0 flex-1 items-center gap-2 text-start text-sm ${
           indent ? 'pl-9' : 'pl-3'
         }`}
       >
+        {generating ? (
+          <LoaderCircleIcon
+            className="text-muted-foreground size-3.5 shrink-0 animate-spin"
+            aria-label="Generating reply"
+          />
+        ) : null}
         <span className="min-w-0 flex-1 truncate">
           {thread.title || 'New Chat'}
         </span>

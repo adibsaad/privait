@@ -152,6 +152,8 @@ export type ThreadActions = {
   rename: (threadId: string, title: string) => void
   archive: (threadId: string) => void
   remove: (threadId: string) => void
+  /** Conversations with a run in flight (streaming or queued). */
+  runningThreadIds: ReadonlySet<string>
 }
 
 export const ThreadActionsContext = createContext<ThreadActions | null>(null)
@@ -638,6 +640,7 @@ export function ApolloChatRuntimeProvider({
   }
 
   const threadActions: ThreadActions = {
+    runningThreadIds,
     switchTo: threadId => {
       setCurrentThreadId(threadId)
       navigate('/chat')
