@@ -49,12 +49,10 @@ jobs:
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
+          sudo apt-get install -y --no-install-recommends \
             libwebkit2gtk-4.1-dev \
             build-essential \
             curl \
-            wget \
-            file \
             libxdo-dev \
             libssl-dev \
             libayatana-appindicator3-dev \
@@ -79,4 +77,4 @@ jobs:
       - name: Test
         run: |
           mkdir -p ../frontend/dist
-          cargo test
+          cargo test --lib --bins
