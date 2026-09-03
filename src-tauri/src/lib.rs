@@ -3,6 +3,7 @@ pub mod db;
 pub mod embeddings;
 pub mod files;
 pub mod jobs;
+pub mod memories;
 pub mod provider;
 pub mod retrieval;
 pub mod runs;
@@ -56,6 +57,7 @@ pub fn run() {
 
             let jobs = tauri::async_runtime::block_on(jobs::Jobs::init(&data_dir.join("jobs.db")))
                 .map_err(|err| format!("failed to open job queue: {err}"))?;
+            let jobs = std::sync::Arc::new(jobs);
 
             // Files live as plain files under app-data/files; the embedding
             // model cache lives under app-data/models (downloaded on first
@@ -77,10 +79,9 @@ pub fn run() {
                 });
             }
 
-            let worker_jobs = jobs.clone();
             tauri::async_runtime::spawn(jobs::run_worker(
-                worker_jobs,
-                jobs::PipelineDeps {
+                (*jobs).clone(),
+                jobs::WorkerDeps {
                     db: db.clone(),
                     storage: storage.clone(),
                     embedder: embedder.clone(),
@@ -99,6 +100,7 @@ pub fn run() {
                     db,
                     storage: Some(storage),
                     embedder,
+                    jobs: Some(jobs.clone()),
                 },
                 schema::FirstChunkTimeout::default().0,
             );
@@ -110,7 +112,6 @@ pub fn run() {
             });
 
             app.manage(ServerInfo { base_url, token });
-            app.manage(jobs);
 
             Ok(())
         })

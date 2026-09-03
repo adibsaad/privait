@@ -3,8 +3,8 @@
 //! (sqlx/apalis); the content DB stays rusqlite.
 //!
 //! The file pipeline moved to `files.rs` (the chat-composer path processes
-//! uploads inline); the worker stays wired for the Reflect phase's
-//! scheduled jobs but nothing pushes to it today.
+//! uploads inline; the queue still carries fallback jobs). 0003 adds the
+//! post-chat memory distillation job.
 
 use std::path::Path;
 
@@ -14,15 +14,32 @@ use sqlx::sqlite::SqlitePoolOptions;
 
 pub use crate::files::PipelineDeps;
 
+/// What the distillation worker needs beyond the queue: content db, file
+/// storage, and the local embedder.
+#[derive(Clone)]
+pub struct WorkerDeps {
+    pub db: crate::db::Db,
+    pub storage: std::sync::Arc<crate::storage::Storage>,
+    pub embedder: std::sync::Arc<dyn crate::embeddings::Embedder>,
+}
+
 /// All apalis usage is routed through this module so version churn can't leak
 /// into resolvers (see docs/architecture.md decisions).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProcessFileJob {
-    pub file_id: i64,
+pub enum AppJob {
+    /// Fallback path for the inline upload pipeline.
+    ProcessFile {
+        file_id: i64,
+    },
+    /// Post-chat memory distillation: proposes memories from the
+    /// conversation's last exchange.
+    DistillMemory {
+        conversation_id: i64,
+    },
 }
 
 type Storage_ = apalis_sqlite::SqliteStorage<
-    ProcessFileJob,
+    AppJob,
     apalis_codec::json::JsonCodec<apalis_sqlite::CompactType>,
     apalis_sqlite::fetcher::SqliteFetcher,
 >;
@@ -54,7 +71,7 @@ impl Jobs {
     /// Enqueues a job.
     pub async fn push_job(
         &self,
-        job: ProcessFileJob,
+        job: AppJob,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut storage = self.storage.clone();
         storage.push(job).await?;
@@ -66,24 +83,77 @@ impl Jobs {
     }
 }
 
-/// Runs the file-processing worker; blocks until the task is cancelled.
-pub async fn run_worker(jobs: Jobs, deps: PipelineDeps) {
-    if let Err(err) = WorkerBuilder::new("process-file")
+/// Runs the background worker (file fallback + memory distillation); blocks
+/// until the task is cancelled.
+pub async fn run_worker(jobs: Jobs, deps: WorkerDeps) {
+    if let Err(err) = WorkerBuilder::new("background-worker")
         .backend(jobs.storage())
         .concurrency(1)
-        .build(move |job: ProcessFileJob| {
+        .build(move |job: AppJob| {
             let deps = deps.clone();
             async move {
-                if let Err(err) = crate::files::process_uploaded_file(&deps, job.file_id).await {
-                    eprintln!("process-file failed for file {}: {err}", job.file_id);
+                match job {
+                    AppJob::ProcessFile { file_id } => {
+                        let pipeline = PipelineDeps {
+                            db: deps.db.clone(),
+                            storage: deps.storage.clone(),
+                            embedder: deps.embedder.clone(),
+                        };
+                        if let Err(err) =
+                            crate::files::process_uploaded_file(&pipeline, file_id).await
+                        {
+                            eprintln!("process-file failed for file {file_id}: {err}");
+                        }
+                    }
+                    AppJob::DistillMemory { conversation_id } => {
+                        if let Err(err) = run_distillation(&deps, conversation_id).await {
+                            eprintln!(
+                                "memory distillation failed for conversation {conversation_id}: {err}"
+                            );
+                        }
+                    }
                 }
             }
         })
         .run()
         .await
     {
-        eprintln!("process-file worker stopped: {err}");
+        eprintln!("background worker stopped: {err}");
     }
+}
+
+/// Distills one conversation using the provider configured in settings.
+async fn run_distillation(deps: &WorkerDeps, conversation_id: i64) -> Result<(), String> {
+    let conn = deps.db.get().map_err(|err| err.to_string())?;
+    if crate::memories::is_incognito(&conn, conversation_id) {
+        return Ok(());
+    }
+    // Re-binding: the connection must not be held across awaits (rusqlite
+    // is !Sync), and the provider is built fresh from settings.
+    drop(conn);
+    let provider = crate::provider::OpenAiCompatProvider::from_settings(
+        {
+            let conn = deps.db.get().map_err(|err| err.to_string())?;
+            (
+                crate::db::get_setting(&conn, "provider.baseUrl").unwrap_or_default(),
+                crate::db::get_setting(&conn, "provider.apiKey").unwrap_or_default(),
+                crate::db::get_setting(&conn, "provider.model").unwrap_or_default(),
+            )
+        }
+        .0,
+        {
+            let conn = deps.db.get().map_err(|err| err.to_string())?;
+            crate::db::get_setting(&conn, "provider.apiKey").unwrap_or_default()
+        },
+        {
+            let conn = deps.db.get().map_err(|err| err.to_string())?;
+            crate::db::get_setting(&conn, "provider.model").unwrap_or_default()
+        },
+    )
+    .ok_or_else(|| "provider not configured".to_string())?;
+    crate::memories::distill_conversation(&deps.db, deps.embedder.as_ref(), &provider, conversation_id)
+        .await?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -108,7 +178,7 @@ mod tests {
         let worker = WorkerBuilder::new("test-worker")
             .backend(jobs.storage())
             .concurrency(1)
-            .build(move |_job: ProcessFileJob| {
+            .build(move |_job: AppJob| {
                 let flag = flag.clone();
                 async move {
                     flag.store(true, Ordering::SeqCst);
@@ -117,7 +187,7 @@ mod tests {
             .run();
         tokio::spawn(worker);
 
-        jobs.push_job(ProcessFileJob { file_id: 42 }).await.unwrap();
+        jobs.push_job(AppJob::ProcessFile { file_id: 42 }).await.unwrap();
 
         for _ in 0..50 {
             if processed.load(Ordering::SeqCst) {
@@ -159,20 +229,25 @@ mod tests {
         let worker = WorkerBuilder::new("test-worker")
             .backend(jobs.storage())
             .concurrency(1)
-            .build(move |job: ProcessFileJob| {
-                let deps = PipelineDeps {
-                    db: worker_db.clone(),
-                    storage: worker_storage.clone(),
-                    embedder: worker_embedder.clone(),
-                };
+            .build(move |job: AppJob| {
+                let worker_db = worker_db.clone();
+                let worker_storage = worker_storage.clone();
+                let worker_embedder = worker_embedder.clone();
                 async move {
-                    let _ = crate::files::process_uploaded_file(&deps, job.file_id).await;
+                    if let AppJob::ProcessFile { file_id } = job {
+                        let deps = PipelineDeps {
+                            db: worker_db,
+                            storage: worker_storage,
+                            embedder: worker_embedder,
+                        };
+                        let _ = crate::files::process_uploaded_file(&deps, file_id).await;
+                    }
                 }
             })
             .run();
         tokio::spawn(worker);
 
-        jobs.push_job(ProcessFileJob { file_id: row.id })
+        jobs.push_job(AppJob::ProcessFile { file_id: row.id })
             .await
             .unwrap();
 

@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     tokio::spawn(jobs::run_worker(
         jobs.clone(),
-        jobs::PipelineDeps {
+        jobs::WorkerDeps {
             db: db.clone(),
             storage: file_storage.clone(),
             embedder: embedder.clone(),
@@ -44,6 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             db,
             storage: Some(file_storage),
             embedder,
+            jobs: Some(std::sync::Arc::new(jobs)),
         },
         schema::FirstChunkTimeout::default().0,
     );

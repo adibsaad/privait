@@ -14,6 +14,11 @@ use crate::runs::RunRegistry;
 use crate::storage::Storage;
 
 use super::files::GqlFileUpload;
+use super::memories::{
+    GqlMemory, MemoryUpdateInput, MutationCreateMemoryResult, MutationCreateMemorySuccess,
+    MutationDeleteMemoryResult, MutationDeleteMemorySuccess, MutationUpdateMemoryResult,
+    MutationUpdateMemorySuccess,
+};
 use super::projects::{get_project, GqlProject};
 use super::settings::{GqlSettings, SettingsInput};
 use super::GqlError;
@@ -667,6 +672,108 @@ impl Mutation {
             ),
             Err(err) => MutationAddProjectKnowledgeResult::Error(GqlError::new(err.to_string())),
         }
+    }
+
+    /// Writes a memory by hand — the explicit path (the automatic one is the
+    /// post-chat distillation job). Visible in the Memories UI immediately.
+    async fn create_memory(
+        &self,
+        ctx: &Context<'_>,
+        content: String,
+    ) -> MutationCreateMemoryResult {
+        let db = match ctx.data::<Db>() {
+            Ok(db) => db,
+            Err(err) => return MutationCreateMemoryResult::Error(GqlError::new(err.message)),
+        };
+        let embedder = match ctx.data::<Arc<dyn crate::embeddings::Embedder>>() {
+            Ok(embedder) => embedder.clone(),
+            Err(err) => return MutationCreateMemoryResult::Error(GqlError::new(err.message)),
+        };
+
+        match crate::memories::write_memory(
+            db,
+            embedder.as_ref(),
+            &content,
+            crate::memories::MemorySource::Manual,
+            None,
+        )
+        .await
+        {
+            Ok(id) => {
+                let conn = match db.get() {
+                    Ok(conn) => conn,
+                    Err(err) => return MutationCreateMemoryResult::Error(GqlError::new(err.to_string())),
+                };
+                match crate::memories::get_memory(&conn, id) {
+                    Ok(Some(memory)) => {
+                        MutationCreateMemoryResult::MutationCreateMemorySuccess(
+                            MutationCreateMemorySuccess {
+                                data: GqlMemory::from(memory),
+                            },
+                        )
+                    }
+                    _ => MutationCreateMemoryResult::Error(GqlError::new("memory vanished")),
+                }
+            }
+            Err(err) => MutationCreateMemoryResult::Error(GqlError::new(err)),
+        }
+    }
+
+    /// Rewrites a memory; the vector re-embeds (same id).
+    async fn update_memory(
+        &self,
+        ctx: &Context<'_>,
+        input: MemoryUpdateInput,
+    ) -> MutationUpdateMemoryResult {
+        let db = match ctx.data::<Db>() {
+            Ok(db) => db,
+            Err(err) => return MutationUpdateMemoryResult::Error(GqlError::new(err.message)),
+        };
+        let embedder = match ctx.data::<Arc<dyn crate::embeddings::Embedder>>() {
+            Ok(embedder) => embedder.clone(),
+            Err(err) => return MutationUpdateMemoryResult::Error(GqlError::new(err.message)),
+        };
+        match crate::memories::update_memory(db, embedder.as_ref(), input.id, &input.content).await
+        {
+            Ok(_) => MutationUpdateMemoryResult::MutationUpdateMemorySuccess(
+                MutationUpdateMemorySuccess { data: true },
+            ),
+            Err(err) => MutationUpdateMemoryResult::Error(GqlError::new(err)),
+        }
+    }
+
+    async fn delete_memory(
+        &self,
+        ctx: &Context<'_>,
+        memory_id: i64,
+    ) -> MutationDeleteMemoryResult {
+        let db = match ctx.data::<Db>() {
+            Ok(db) => db,
+            Err(err) => return MutationDeleteMemoryResult::Error(GqlError::new(err.message)),
+        };
+        match crate::memories::delete_memory(db, memory_id).await {
+            Ok(_) => MutationDeleteMemoryResult::MutationDeleteMemorySuccess(
+                MutationDeleteMemorySuccess { data: true },
+            ),
+            Err(err) => MutationDeleteMemoryResult::Error(GqlError::new(err)),
+        }
+    }
+
+    /// Incognito per chat: no memory reads, no distillation writes, no
+    /// search hits. Existing memories are untouched.
+    async fn set_conversation_incognito(
+        &self,
+        ctx: &Context<'_>,
+        conversation_id: i64,
+        incognito: bool,
+    ) -> async_graphql::Result<bool> {
+        let db = ctx.data::<Db>()?;
+        let conn = db.get()?;
+        conn.execute(
+            "UPDATE conversations SET incognito = ?1 WHERE id = ?2",
+            rusqlite::params![incognito as i64, conversation_id],
+        )?;
+        Ok(true)
     }
 }
 

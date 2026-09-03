@@ -111,6 +111,24 @@ const EXPECTED_DIFF = [
   // 0001 run registry: server-side half of the stop button (see the
   // per-conversation run registry row in docs/architecture.md).
   'Mutation: + stopRun: (conversationId: Int!): Boolean!',
+  // 0003 memory plane: inspectable memories (CRUD + provenance), incognito
+  // per chat, transcript search backend (see docs/architecture.md).
+  'Mutation: + createMemory: (content: String!): MutationCreateMemoryResult!',
+  'Mutation: + deleteMemory: (memoryId: Int!): MutationDeleteMemoryResult!',
+  'Mutation: + setConversationIncognito: (conversationId: Int!, incognito: Boolean!): Boolean!',
+  'Mutation: + updateMemory: (input: MemoryUpdateInput!): MutationUpdateMemoryResult!',
+  'Query: + memories: [Memory!]!',
+  'Query: + searchHistory: (conversationId: Int!, query: String!, wholeVault: Boolean): [SearchResult!]!',
+  'type added: Memory',
+  'type added: MemorySource',
+  'type added: MemoryUpdateInput',
+  'type added: MutationCreateMemoryResult',
+  'type added: MutationCreateMemorySuccess',
+  'type added: MutationDeleteMemoryResult',
+  'type added: MutationDeleteMemorySuccess',
+  'type added: MutationUpdateMemoryResult',
+  'type added: MutationUpdateMemorySuccess',
+  'type added: SearchResult',
   // 0002 projects: the workspace container (see the projects row in
   // docs/architecture.md).
   'Conversation: + projectId: Int',

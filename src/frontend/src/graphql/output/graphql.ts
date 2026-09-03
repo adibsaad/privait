@@ -85,6 +85,27 @@ export type FileUploadInput = {
   file: Scalars['Upload']['input']
 }
 
+/** A stored memory: durable fact with source + provenance. */
+export type Memory = {
+  __typename?: 'Memory'
+  content: Scalars['String']['output']
+  conversationId?: Maybe<Scalars['Int']['output']>
+  createdAt: Scalars['String']['output']
+  id: Scalars['ID']['output']
+  source: MemorySource
+  updatedAt: Scalars['String']['output']
+}
+
+export enum MemorySource {
+  Distilled = 'DISTILLED',
+  Manual = 'MANUAL',
+}
+
+export type MemoryUpdateInput = {
+  content: Scalars['String']['input']
+  id: Scalars['Int']['input']
+}
+
 export type Message = {
   __typename?: 'Message'
   content: Scalars['String']['output']
@@ -113,6 +134,11 @@ export type Mutation = {
   addProjectKnowledge: MutationAddProjectKnowledgeResult
   archiveConversation: MutationArchiveConversationResult
   /**
+   * Writes a memory by hand — the explicit path (the automatic one is the
+   * post-chat distillation job). Visible in the Memories UI immediately.
+   */
+  createMemory: MutationCreateMemoryResult
+  /**
    * Creates a project: name + optional instructions. Local-only container
    * for chats and knowledge.
    */
@@ -120,6 +146,7 @@ export type Mutation = {
   deleteConversation: MutationDeleteConversationResult
   /** Removes the upload, its stored bytes, and its vector chunks. */
   deleteFileUpload: MutationDeleteFileUploadResult
+  deleteMemory: MutationDeleteMemoryResult
   /**
    * Deletes a project: its chats survive as plain chats (project_id goes
    * NULL) and its knowledge files are removed with their chunks and bytes.
@@ -129,11 +156,18 @@ export type Mutation = {
   renameProject: MutationRenameProjectResult
   saveSettings: MutationSaveSettingsResult
   /**
+   * Incognito per chat: no memory reads, no distillation writes, no
+   * search hits. Existing memories are untouched.
+   */
+  setConversationIncognito: Scalars['Boolean']['output']
+  /**
    * Server-side half of the stop button: cancels the conversation's
    * in-flight reply; the pump task then persists whatever streamed so
    * far. `false` when no reply is in flight (late stop press).
    */
   stopRun: Scalars['Boolean']['output']
+  /** Rewrites a memory; the vector re-embeds (same id). */
+  updateMemory: MutationUpdateMemoryResult
   /**
    * Sets the project's standing instructions, applied to every chat in
    * the project.
@@ -160,6 +194,10 @@ export type MutationArchiveConversationArgs = {
   conversationId: Scalars['Int']['input']
 }
 
+export type MutationCreateMemoryArgs = {
+  content: Scalars['String']['input']
+}
+
 export type MutationCreateProjectArgs = {
   instructions?: InputMaybe<Scalars['String']['input']>
   name: Scalars['String']['input']
@@ -171,6 +209,10 @@ export type MutationDeleteConversationArgs = {
 
 export type MutationDeleteFileUploadArgs = {
   fileId: Scalars['Int']['input']
+}
+
+export type MutationDeleteMemoryArgs = {
+  memoryId: Scalars['Int']['input']
 }
 
 export type MutationDeleteProjectArgs = {
@@ -191,8 +233,17 @@ export type MutationSaveSettingsArgs = {
   input: SettingsInput
 }
 
+export type MutationSetConversationIncognitoArgs = {
+  conversationId: Scalars['Int']['input']
+  incognito: Scalars['Boolean']['input']
+}
+
 export type MutationStopRunArgs = {
   conversationId: Scalars['Int']['input']
+}
+
+export type MutationUpdateMemoryArgs = {
+  input: MemoryUpdateInput
 }
 
 export type MutationUpdateProjectInstructionsArgs = {
@@ -222,6 +273,13 @@ export type MutationArchiveConversationSuccess = {
   data: Scalars['Boolean']['output']
 }
 
+export type MutationCreateMemoryResult = Error | MutationCreateMemorySuccess
+
+export type MutationCreateMemorySuccess = {
+  __typename?: 'MutationCreateMemorySuccess'
+  data: Memory
+}
+
 export type MutationCreateProjectResult = Error | MutationCreateProjectSuccess
 
 export type MutationCreateProjectSuccess = {
@@ -244,6 +302,13 @@ export type MutationDeleteFileUploadResult =
 
 export type MutationDeleteFileUploadSuccess = {
   __typename?: 'MutationDeleteFileUploadSuccess'
+  data: Scalars['Boolean']['output']
+}
+
+export type MutationDeleteMemoryResult = Error | MutationDeleteMemorySuccess
+
+export type MutationDeleteMemorySuccess = {
+  __typename?: 'MutationDeleteMemorySuccess'
   data: Scalars['Boolean']['output']
 }
 
@@ -275,6 +340,13 @@ export type MutationSaveSettingsResult = Error | MutationSaveSettingsSuccess
 export type MutationSaveSettingsSuccess = {
   __typename?: 'MutationSaveSettingsSuccess'
   data: Settings
+}
+
+export type MutationUpdateMemoryResult = Error | MutationUpdateMemorySuccess
+
+export type MutationUpdateMemorySuccess = {
+  __typename?: 'MutationUpdateMemorySuccess'
+  data: Scalars['Boolean']['output']
 }
 
 export type MutationUpdateProjectInstructionsResult =
@@ -317,9 +389,21 @@ export type Query = {
   files: Array<FileUpload>
   /** Liveness check for the in-process API server. */
   health: Scalars['String']['output']
+  /**
+   * All stored memories, newest first. Every memory is visible here —
+   * distilled ones carry the chat that produced them.
+   */
+  memories: Array<Memory>
   project?: Maybe<Project>
   /** All projects, oldest first — the sidebar's project groups. */
   projects: Array<Project>
+  /**
+   * Full-text search over transcripts: project-scoped by default (the
+   * project of the conversation asking), `wholeVault` widens to all
+   * chats, incognito chats always excluded. Tool-loop exposure lands in
+   * 0004.
+   */
+  searchHistory: Array<SearchResult>
   settings: Settings
 }
 
@@ -329,6 +413,21 @@ export type QueryConversationArgs = {
 
 export type QueryProjectArgs = {
   projectId: Scalars['Int']['input']
+}
+
+export type QuerySearchHistoryArgs = {
+  conversationId: Scalars['Int']['input']
+  query: Scalars['String']['input']
+  wholeVault?: InputMaybe<Scalars['Boolean']['input']>
+}
+
+/** One transcript hit from the full-text search. */
+export type SearchResult = {
+  __typename?: 'SearchResult'
+  conversationId: Scalars['Int']['output']
+  conversationTitle: Scalars['String']['output']
+  messageId: Scalars['ID']['output']
+  snippet: Scalars['String']['output']
 }
 
 export type Settings = {
@@ -421,6 +520,16 @@ export type DeleteProjectMutation = {
     | { __typename: 'MutationDeleteProjectSuccess' }
 }
 
+export type SetConversationIncognitoMutationVariables = Exact<{
+  conversationId: Scalars['Int']['input']
+  incognito: Scalars['Boolean']['input']
+}>
+
+export type SetConversationIncognitoMutation = {
+  __typename?: 'Mutation'
+  setConversationIncognito: boolean
+}
+
 export type CreateProjectMutationVariables = Exact<{
   name: Scalars['String']['input']
   instructions?: InputMaybe<Scalars['String']['input']>
@@ -501,6 +610,56 @@ export type SaveSettingsMutation = {
           model: string
         }
       }
+}
+
+export type MemoriesQueryVariables = Exact<{ [key: string]: never }>
+
+export type MemoriesQuery = {
+  __typename?: 'Query'
+  memories: Array<{
+    __typename?: 'Memory'
+    id: string
+    content: string
+    source: MemorySource
+    conversationId?: number | null
+    updatedAt: string
+  }>
+}
+
+export type CreateMemoryMutationVariables = Exact<{
+  content: Scalars['String']['input']
+}>
+
+export type CreateMemoryMutation = {
+  __typename?: 'Mutation'
+  createMemory:
+    | { __typename: 'Error'; message: string }
+    | {
+        __typename: 'MutationCreateMemorySuccess'
+        data: { __typename?: 'Memory'; id: string; content: string }
+      }
+}
+
+export type UpdateMemoryMutationVariables = Exact<{
+  input: MemoryUpdateInput
+}>
+
+export type UpdateMemoryMutation = {
+  __typename?: 'Mutation'
+  updateMemory:
+    | { __typename: 'Error'; message: string }
+    | { __typename: 'MutationUpdateMemorySuccess' }
+}
+
+export type DeleteMemoryMutationVariables = Exact<{
+  memoryId: Scalars['Int']['input']
+}>
+
+export type DeleteMemoryMutation = {
+  __typename?: 'Mutation'
+  deleteMemory:
+    | { __typename: 'Error'; message: string }
+    | { __typename: 'MutationDeleteMemorySuccess' }
 }
 
 export type CurrentUserQueryVariables = Exact<{ [key: string]: never }>
@@ -772,6 +931,73 @@ export const DeleteProjectDocument = {
 } as unknown as DocumentNode<
   DeleteProjectMutation,
   DeleteProjectMutationVariables
+>
+export const SetConversationIncognitoDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'mutation',
+      name: { kind: 'Name', value: 'SetConversationIncognito' },
+      variableDefinitions: [
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'conversationId' },
+          },
+          type: {
+            kind: 'NonNullType',
+            type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
+          },
+        },
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'incognito' },
+          },
+          type: {
+            kind: 'NonNullType',
+            type: {
+              kind: 'NamedType',
+              name: { kind: 'Name', value: 'Boolean' },
+            },
+          },
+        },
+      ],
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'setConversationIncognito' },
+            arguments: [
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'conversationId' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'conversationId' },
+                },
+              },
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'incognito' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'incognito' },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<
+  SetConversationIncognitoMutation,
+  SetConversationIncognitoMutationVariables
 >
 export const CreateProjectDocument = {
   kind: 'Document',
@@ -1290,6 +1516,277 @@ export const SaveSettingsDocument = {
 } as unknown as DocumentNode<
   SaveSettingsMutation,
   SaveSettingsMutationVariables
+>
+export const MemoriesDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'query',
+      name: { kind: 'Name', value: 'Memories' },
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'memories' },
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                { kind: 'Field', name: { kind: 'Name', value: 'id' } },
+                { kind: 'Field', name: { kind: 'Name', value: 'content' } },
+                { kind: 'Field', name: { kind: 'Name', value: 'source' } },
+                {
+                  kind: 'Field',
+                  name: { kind: 'Name', value: 'conversationId' },
+                },
+                { kind: 'Field', name: { kind: 'Name', value: 'updatedAt' } },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<MemoriesQuery, MemoriesQueryVariables>
+export const CreateMemoryDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'mutation',
+      name: { kind: 'Name', value: 'CreateMemory' },
+      variableDefinitions: [
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'content' },
+          },
+          type: {
+            kind: 'NonNullType',
+            type: {
+              kind: 'NamedType',
+              name: { kind: 'Name', value: 'String' },
+            },
+          },
+        },
+      ],
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'createMemory' },
+            arguments: [
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'content' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'content' },
+                },
+              },
+            ],
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: {
+                      kind: 'Name',
+                      value: 'MutationCreateMemorySuccess',
+                    },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'data' },
+                        selectionSet: {
+                          kind: 'SelectionSet',
+                          selections: [
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'id' },
+                            },
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'content' },
+                            },
+                          ],
+                        },
+                      },
+                    ],
+                  },
+                },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: { kind: 'Name', value: 'Error' },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'message' },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<
+  CreateMemoryMutation,
+  CreateMemoryMutationVariables
+>
+export const UpdateMemoryDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'mutation',
+      name: { kind: 'Name', value: 'UpdateMemory' },
+      variableDefinitions: [
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'input' },
+          },
+          type: {
+            kind: 'NonNullType',
+            type: {
+              kind: 'NamedType',
+              name: { kind: 'Name', value: 'MemoryUpdateInput' },
+            },
+          },
+        },
+      ],
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'updateMemory' },
+            arguments: [
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'input' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'input' },
+                },
+              },
+            ],
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: { kind: 'Name', value: 'Error' },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'message' },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<
+  UpdateMemoryMutation,
+  UpdateMemoryMutationVariables
+>
+export const DeleteMemoryDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'mutation',
+      name: { kind: 'Name', value: 'DeleteMemory' },
+      variableDefinitions: [
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'memoryId' },
+          },
+          type: {
+            kind: 'NonNullType',
+            type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
+          },
+        },
+      ],
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'deleteMemory' },
+            arguments: [
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'memoryId' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'memoryId' },
+                },
+              },
+            ],
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: { kind: 'Name', value: 'Error' },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'message' },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<
+  DeleteMemoryMutation,
+  DeleteMemoryMutationVariables
 >
 export const CurrentUserDocument = {
   kind: 'Document',

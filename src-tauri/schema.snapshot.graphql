@@ -48,6 +48,28 @@ input FileUploadInput {
 	file: Upload!
 }
 
+"""
+A stored memory: durable fact with source + provenance.
+"""
+type Memory {
+	id: ID!
+	content: String!
+	source: MemorySource!
+	conversationId: Int
+	createdAt: String!
+	updatedAt: String!
+}
+
+enum MemorySource {
+	MANUAL
+	DISTILLED
+}
+
+input MemoryUpdateInput {
+	id: Int!
+	content: String!
+}
+
 type Message {
 	id: ID!
 	role: MessageRole!
@@ -111,6 +133,21 @@ type Mutation {
 	unattached uploads are claimed.
 	"""
 	addProjectKnowledge(projectId: Int!, fileIds: [Int!]!): MutationAddProjectKnowledgeResult!
+	"""
+	Writes a memory by hand — the explicit path (the automatic one is the
+	post-chat distillation job). Visible in the Memories UI immediately.
+	"""
+	createMemory(content: String!): MutationCreateMemoryResult!
+	"""
+	Rewrites a memory; the vector re-embeds (same id).
+	"""
+	updateMemory(input: MemoryUpdateInput!): MutationUpdateMemoryResult!
+	deleteMemory(memoryId: Int!): MutationDeleteMemoryResult!
+	"""
+	Incognito per chat: no memory reads, no distillation writes, no
+	search hits. Existing memories are untouched.
+	"""
+	setConversationIncognito(conversationId: Int!, incognito: Boolean!): Boolean!
 }
 
 union MutationAddProjectKnowledgeResult = Error | MutationAddProjectKnowledgeSuccess
@@ -123,6 +160,12 @@ union MutationArchiveConversationResult = Error | MutationArchiveConversationSuc
 
 type MutationArchiveConversationSuccess {
 	data: Boolean!
+}
+
+union MutationCreateMemoryResult = Error | MutationCreateMemorySuccess
+
+type MutationCreateMemorySuccess {
+	data: Memory!
 }
 
 union MutationCreateProjectResult = Error | MutationCreateProjectSuccess
@@ -140,6 +183,12 @@ type MutationDeleteConversationSuccess {
 union MutationDeleteFileUploadResult = Error | MutationDeleteFileUploadSuccess
 
 type MutationDeleteFileUploadSuccess {
+	data: Boolean!
+}
+
+union MutationDeleteMemoryResult = Error | MutationDeleteMemorySuccess
+
+type MutationDeleteMemorySuccess {
 	data: Boolean!
 }
 
@@ -165,6 +214,12 @@ union MutationSaveSettingsResult = Error | MutationSaveSettingsSuccess
 
 type MutationSaveSettingsSuccess {
 	data: Settings!
+}
+
+union MutationUpdateMemoryResult = Error | MutationUpdateMemorySuccess
+
+type MutationUpdateMemorySuccess {
+	data: Boolean!
 }
 
 union MutationUpdateProjectInstructionsResult = Error | MutationUpdateProjectInstructionsSuccess
@@ -213,6 +268,28 @@ type Query {
 	All uploaded files, oldest first (matches the old resolver's ordering).
 	"""
 	files: [FileUpload!]!
+	"""
+	All stored memories, newest first. Every memory is visible here —
+	distilled ones carry the chat that produced them.
+	"""
+	memories: [Memory!]!
+	"""
+	Full-text search over transcripts: project-scoped by default (the
+	project of the conversation asking), `wholeVault` widens to all
+	chats, incognito chats always excluded. Tool-loop exposure lands in
+	0004.
+	"""
+	searchHistory(query: String!, conversationId: Int!, wholeVault: Boolean): [SearchResult!]!
+}
+
+"""
+One transcript hit from the full-text search.
+"""
+type SearchResult {
+	conversationId: Int!
+	conversationTitle: String!
+	messageId: ID!
+	snippet: String!
 }
 
 type Settings {

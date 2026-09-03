@@ -6,6 +6,7 @@
 
 mod chat;
 mod files;
+mod memories;
 mod mutation;
 mod projects;
 mod query;
@@ -22,6 +23,7 @@ pub use chat::{
     MessageRole, Subscription,
 };
 pub use files::{GqlFileStatus, GqlFileType, GqlFileUpload};
+pub use memories::{GqlMemory, GqlMemorySource, GqlSearchResult};
 pub use mutation::Mutation;
 pub use projects::GqlProject;
 pub use query::Query;
@@ -58,11 +60,14 @@ pub type AppSchema = async_graphql::Schema<Query, Mutation, Subscription>;
 
 /// Everything the schema's resolvers reach for beyond the content DB.
 /// `storage` is `None` only in test/dev schemas that never touch uploads —
-/// the resolvers surface a clean `Error` arm in that case.
+/// the resolvers surface a clean `Error` arm in that case. `jobs` is `None`
+/// where no queue exists (tests without the worker): background enqueue
+/// (memory distillation) is skipped then.
 pub struct SchemaContext {
     pub db: Db,
     pub storage: Option<Arc<Storage>>,
     pub embedder: Arc<dyn Embedder>,
+    pub jobs: Option<Arc<crate::jobs::Jobs>>,
 }
 
 pub fn build_schema(db: Db) -> AppSchema {
@@ -78,6 +83,7 @@ pub fn build_schema_with_timeout(db: Db, timeout: Duration) -> AppSchema {
             db,
             storage: None,
             embedder,
+            jobs: None,
         },
         timeout,
     )
@@ -88,6 +94,7 @@ pub fn build_schema_with_context(ctx: SchemaContext, timeout: Duration) -> AppSc
         .data(ctx.db)
         .data(ctx.storage)
         .data(ctx.embedder)
+        .data(ctx.jobs)
         .data(FirstChunkTimeout(timeout))
         .data(Arc::new(RunRegistry::new()))
         .finish()

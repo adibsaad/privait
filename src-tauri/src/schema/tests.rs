@@ -453,8 +453,17 @@ pub(crate) mod chat_tests {
             };
             for (content, slot) in [("apple memory", 0usize), ("banana memory", 1usize)] {
                 conn.execute(
-                    "INSERT INTO memories (embedding, content) VALUES (?1, ?2)",
-                    rusqlite::params![db::embedding_to_blob(&store(slot)), content],
+                    "INSERT INTO memories (content, source, created_at, updated_at)
+                     VALUES (?1, 'manual', '0', '0')",
+                    [content],
+                )
+                .unwrap();
+                conn.execute(
+                    "INSERT INTO memories_vec (embedding, memory_id) VALUES (?1, ?2)",
+                    rusqlite::params![
+                        db::embedding_to_blob(&store(slot)),
+                        conn.last_insert_rowid()
+                    ],
                 )
                 .unwrap();
             }
@@ -1025,12 +1034,12 @@ pub(crate) mod mutation_tests {
     use std::sync::Arc;
     
     use serde_json::json;
+    use futures_util::StreamExt;
     
     use tower::ServiceExt;
     
+    use rusqlite::params;
     use crate::db::{self};
-    
-    
 
     #[tokio::test]
     async fn delete_conversation_mutation_removes_rows() {
@@ -1863,6 +1872,309 @@ pub(crate) mod mutation_tests {
             serde_json::to_value(&response.data).unwrap()["addProjectKnowledge"]["__typename"],
             json!("MutationAddProjectKnowledgeSuccess")
         );
+    }
+
+    #[tokio::test]
+    async fn memory_crud_round_trip() {
+        let db = test_db();
+        let schema = schema_with(db.clone());
+
+        // Create (explicit path): source manual, no provenance.
+        let response = schema
+            .execute("mutation { createMemory(content: \"User plans to run a 10k in May\") { __typename ... on MutationCreateMemorySuccess { data { id content source conversationId } } ... on Error { message } } }")
+            .await
+            .into_result()
+            .unwrap();
+        let created = serde_json::to_value(&response.data).unwrap()["createMemory"].clone();
+        assert_eq!(created["__typename"], json!("MutationCreateMemorySuccess"), "{created:?}");
+        assert_eq!(created["data"]["content"], json!("User plans to run a 10k in May"));
+        assert_eq!(created["data"]["source"], json!("MANUAL"));
+        assert_eq!(created["data"]["conversationId"], json!(null));
+        let memory_id: i64 = created["data"]["id"].as_str().unwrap().parse().unwrap();
+
+        // Read: the list shows it.
+        let response = schema
+            .execute("query { memories { id content source } }")
+            .await
+            .into_result()
+            .unwrap();
+        let memories = serde_json::to_value(&response.data).unwrap()["memories"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(memories.len(), 1);
+        assert_eq!(memories[0]["source"], json!("MANUAL"));
+
+        // Update: content rewrites (and re-embeds under the hood).
+        let response = schema
+            .execute(format!("mutation {{ updateMemory(input: {{ id: {memory_id}, content: \"User runs a half-marathon in May\" }}) {{ __typename ... on Error {{ message }} }} }}"))
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&response.data).unwrap()["updateMemory"]["__typename"],
+            json!("MutationUpdateMemorySuccess")
+        );
+
+        // Delete: everything about it goes.
+        let response = schema
+            .execute(format!("mutation {{ deleteMemory(memoryId: {memory_id}) {{ __typename ... on Error {{ message }} }} }}"))
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&response.data).unwrap()["deleteMemory"]["__typename"],
+            json!("MutationDeleteMemorySuccess")
+        );
+
+        let conn = db.get().unwrap();
+        let (memories, vectors): (i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM memories),
+                        (SELECT COUNT(*) FROM memories_vec)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(memories, 0);
+        assert_eq!(vectors, 0);
+
+        // Missing memory / empty content are clean errors.
+        let response = schema
+            .execute("mutation { deleteMemory(memoryId: 99) { __typename ... on Error { message } } }")
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&response.data).unwrap()["deleteMemory"]["__typename"],
+            json!("Error")
+        );
+        let response = schema
+            .execute("mutation { createMemory(content: \"   \") { __typename } }")
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&response.data).unwrap()["createMemory"]["__typename"],
+            json!("Error")
+        );
+    }
+
+    #[tokio::test]
+    async fn memories_ground_across_chats_with_tunable_threshold() {
+        let db = test_db();
+        let embedder: Arc<dyn Embedder> = Arc::new(
+            crate::embeddings::FakeEmbedder::by_keyword(&["march", "other"]),
+        );
+        {
+            // Provenance: this memory was distilled in chat 1.
+            let conn = db.get().unwrap();
+            conn.execute(
+                "INSERT INTO conversations (id, title, created_at, updated_at) VALUES (1, 'venting', '0', '0')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO memories (content, source, conversation_id, created_at, updated_at)
+                 VALUES ('User felt burned out by the March workload', 'distilled', 1, '0', '0')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO memories_vec (embedding, memory_id) VALUES (?1, ?2)",
+                // Borderline: exactly 0.5 similarity to the "march" query —
+                // cleared by the default threshold, silenced by 0.95.
+                rusqlite::params![
+                    db::embedding_to_blob(&{
+                        let mut vector = vec![0.0f32; db::EMBEDDING_DIM];
+                        vector[0] = 0.5;
+                        vector[1] = 0.75f32.sqrt();
+                        vector
+                    }),
+                    conn.last_insert_rowid()
+                ],
+            )
+            .unwrap();
+        }
+
+        let (base_url, captured) = spawn_capturing_mock_provider(vec!["noted"]).await;
+        {
+            let conn = db.get().unwrap();
+            seed_provider_settings(&conn, &base_url).await;
+        }
+        let schema = upload_context(db.clone(), crate::storage::Storage::memory().unwrap(), embedder);
+
+        // The cross-chat ask: a fresh conversation (2) about burnout — the
+        // memory distilled in chat 1 grounds it ("March burnout"-style).
+        {
+            let conn = db.get().unwrap();
+            conn.execute(
+                "INSERT INTO conversations (id, title, created_at, updated_at) VALUES (2, 'new week', '0', '0')",
+                [],
+            )
+            .unwrap();
+        }
+        let mut stream =
+            schema.execute_stream(subscription_request(Some(2), "the march rush got to me"));
+        while stream.next().await.is_some() {}
+
+        let request = captured.lock().unwrap().clone().unwrap();
+        let contents: Vec<String> = request["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["content"].as_str().unwrap_or_default().to_string())
+            .collect();
+        assert!(
+            contents
+                .iter()
+                .any(|c| c.contains("User felt burned out by the March workload")),
+            "the distilled memory should ground another chat: {contents:?}"
+        );
+
+        // Turn the threshold up: nothing clears 0.95, so the memory stays
+        // silent (tunable, read per turn).
+        {
+            let conn = db.get().unwrap();
+            db::set_setting(&conn, "retrieval.threshold", "0.95").unwrap();
+        }
+        captured.lock().unwrap().take();
+        let mut stream =
+            schema.execute_stream(subscription_request(Some(2), "the march rush got to me"));
+        while stream.next().await.is_some() {}
+        let second = captured.lock().unwrap().clone().unwrap();
+        let contents: Vec<String> = second["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["content"].as_str().unwrap_or_default().to_string())
+            .collect();
+        assert!(
+            !contents.iter().any(|c| c.contains("burned out")),
+            "a raised threshold must silence the memory: {contents:?}"
+        );
+        // Restore the default for the remaining reads.
+        {
+            let conn = db.get().unwrap();
+            db::set_setting(&conn, "retrieval.threshold", "0.5").unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn incognito_chats_read_no_memories_and_stay_out_of_search() {
+        let db = test_db();
+        let embedder: Arc<dyn Embedder> = Arc::new(
+            crate::embeddings::FakeEmbedder::by_keyword(&["march", "other"]),
+        );
+        {
+            let conn = db.get().unwrap();
+            conn.execute(
+                "INSERT INTO conversations (id, title, created_at, updated_at, incognito)
+                 VALUES (9, 'private', '0', '0', 1)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO conversations (id, title, created_at, updated_at) VALUES (10, 'public', '0', '0')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO memories (content, source, created_at, updated_at)
+                 VALUES ('User felt burned out by the March workload', 'distilled', '0', '0')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO memories_vec (embedding, memory_id) VALUES (?1, ?2)",
+                rusqlite::params![
+                    db::embedding_to_blob(&{
+                        let mut vector = vec![0.0f32; db::EMBEDDING_DIM];
+                        vector[0] = 1.0;
+                        vector
+                    }),
+                    conn.last_insert_rowid()
+                ],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO messages (id, conversation_id, role, content, created_at)
+                 VALUES (1, 9, 'USER', 'the march deadline is eating me alive', '0')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO messages (id, conversation_id, role, content, created_at)
+                 VALUES (2, 10, 'USER', 'march was a quiet month', '0')",
+                [],
+            )
+            .unwrap();
+        }
+
+        let schema = schema_with(db.clone());
+
+        // Incognito flag round-trip through its mutation.
+        let response = schema
+            .execute("mutation { setConversationIncognito(conversationId: 9, incognito: false) }")
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&response.data).unwrap()["setConversationIncognito"],
+            json!(true)
+        );
+        let response = schema
+            .execute("mutation { setConversationIncognito(conversationId: 9, incognito: true) }")
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&response.data).unwrap()["setConversationIncognito"],
+            json!(true)
+        );
+
+        // Memory reads skip incognito chats entirely.
+        let response = schema
+            .execute("query { memories { id } }")
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&response.data).unwrap()["memories"].as_array().unwrap().len(),
+            1,
+            "the list itself is unaffected"
+        );
+
+        // Transcript search: project-less scope covers the vault EXCEPT the
+        // incognito chat.
+        let response = schema
+            .execute("query { searchHistory(query: \"march\", conversationId: 10, wholeVault: true) { conversationId snippet } }")
+            .await
+            .into_result()
+            .unwrap();
+        let hits = serde_json::to_value(&response.data).unwrap()["searchHistory"]
+            .as_array()
+            .unwrap()
+            .clone();
+        let hit_ids: Vec<i64> = hits
+            .iter()
+            .map(|h| h["conversationId"].as_i64().unwrap())
+            .collect();
+        assert!(!hit_ids.contains(&9), "incognito chat must be invisible: {hit_ids:?}");
+        assert!(hit_ids.contains(&10));
+
+        // Project scope: chat 10 has no project, so the default scope (its
+        // "project" = whole vault minus incognito) still excludes chat 9.
+        let response = schema
+            .execute("query { searchHistory(query: \"march\", conversationId: 10) { conversationId } }")
+            .await
+            .into_result()
+            .unwrap();
+        let hits = serde_json::to_value(&response.data).unwrap()["searchHistory"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert!(hits.iter().all(|h| h["conversationId"].as_i64() != Some(9)));
     }
 
 }

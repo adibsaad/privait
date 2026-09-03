@@ -491,6 +491,13 @@ impl Subscription {
 
         let (tx, rx) = tokio::sync::mpsc::channel::<SubscriptionConversationResult>(64);
         let chunk_db = db.clone();
+        // Exists in the real app (lib.rs); None in test schemas without a
+        // queue — background distillation is skipped there.
+        let chat_jobs = ctx
+            .data::<Option<Arc<crate::jobs::Jobs>>>()
+            .ok()
+            .cloned()
+            .flatten();
 
         // Bound on time-to-first-chunk so a hung provider can't leave the
         // composer spinning forever; overridable for tests.
@@ -636,6 +643,7 @@ impl Subscription {
             // stop that landed before the first chunk deletes the empty
             // placeholder instead of leaving a ghost bubble).
             let content = accumulated;
+            let produced_reply = !content.is_empty();
             if let Ok(conn) = chunk_db.get() {
                 if stopped && content.is_empty() {
                     let _ = conn
@@ -645,6 +653,22 @@ impl Subscription {
                         "UPDATE messages SET content = ?1 WHERE id = ?2",
                         params![content, assistant_message_id],
                     );
+                }
+            }
+
+            // Post-chat distillation: the automatic memory path. Skipped for
+            // incognito chats and failed/empty turns; the queue worker
+            // re-checks incognito (this job may sit behind others).
+            if !failed && produced_reply {
+                if let Some(jobs) = chat_jobs {
+                    if let Err(err) = jobs
+                        .push_job(crate::jobs::AppJob::DistillMemory { conversation_id })
+                        .await
+                    {
+                        eprintln!(
+                            "distill job enqueue failed for conversation {conversation_id}: {err}"
+                        );
+                    }
                 }
             }
         });

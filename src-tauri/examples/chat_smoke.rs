@@ -56,6 +56,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             db: db.clone(),
             storage: Some(file_storage),
             embedder,
+            jobs: None,
         },
         privait_lib::schema::FirstChunkTimeout::default().0,
     );

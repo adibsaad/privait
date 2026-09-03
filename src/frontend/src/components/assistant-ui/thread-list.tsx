@@ -5,11 +5,13 @@ import { useMutation, useQuery } from '@apollo/client/react'
 import { AuiIf, ThreadListPrimitive } from '@assistant-ui/react'
 import {
   ArchiveIcon,
+  EyeOffIcon,
   FolderIcon,
   MoreHorizontalIcon,
   PlusIcon,
   TrashIcon,
 } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { ProjectDialog } from '@frontend/components/project-dialog'
 import {
@@ -35,6 +37,7 @@ import {
   AllConversationsDocument,
   DeleteProjectDocument,
   ProjectsDocument,
+  SetConversationIncognitoDocument,
 } from '@frontend/graphql/output/graphql'
 import { useThreadActions } from '@frontend/providers/apollo-chat-runtime'
 
@@ -230,6 +233,23 @@ const ThreadRow: FC<{ thread: Thread; indent?: boolean }> = ({
   const { currentThreadId } = useThreadContext()
   const actions = useThreadActions()
   const active = currentThreadId === thread.id
+  const [incognito, setIncognito] = useState(false)
+  const [setIncognitoState] = useMutation(SetConversationIncognitoDocument)
+
+  const toggleIncognito = async () => {
+    const next = !incognito
+    setIncognito(next)
+    if (Number(thread.id)) {
+      await setIncognitoState({
+        variables: { conversationId: Number(thread.id), incognito: next },
+      })
+      toast(
+        next
+          ? 'Incognito on — this chat reads and writes no memories'
+          : 'Incognito off — this chat uses memories again',
+      )
+    }
+  }
 
   return (
     <div
@@ -246,6 +266,9 @@ const ThreadRow: FC<{ thread: Thread; indent?: boolean }> = ({
         <span className="min-w-0 flex-1 truncate">
           {thread.title || 'New Chat'}
         </span>
+        {incognito && (
+          <EyeOffIcon className="text-muted-foreground mr-1 size-3.5 shrink-0" />
+        )}
       </button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -259,6 +282,10 @@ const ThreadRow: FC<{ thread: Thread; indent?: boolean }> = ({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-32">
+          <DropdownMenuItem onSelect={() => void toggleIncognito()}>
+            <EyeOffIcon className="size-4" />
+            {incognito ? 'Leave incognito' : 'Incognito'}
+          </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => actions.archive(thread.id)}>
             <ArchiveIcon className="size-4" /> Archive
           </DropdownMenuItem>
@@ -322,5 +349,15 @@ gql(/* GraphQL */ `
         message
       }
     }
+  }
+
+  mutation SetConversationIncognito(
+    $conversationId: Int!
+    $incognito: Boolean!
+  ) {
+    setConversationIncognito(
+      conversationId: $conversationId
+      incognito: $incognito
+    )
   }
 `)

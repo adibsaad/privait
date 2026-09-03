@@ -197,6 +197,7 @@ pub(crate) const SNAPSHOT_PATH: &str = "schema.snapshot.graphql";
                 db,
                 storage: Some(Arc::new(storage)),
                 embedder,
+                jobs: None,
             },
             FirstChunkTimeout::default().0,
         )

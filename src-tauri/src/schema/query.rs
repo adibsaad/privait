@@ -8,6 +8,7 @@ use crate::files;
 
 use super::chat::GqlConversation;
 use super::files::GqlFileUpload;
+use super::memories::{GqlMemory, GqlSearchResult};
 use super::projects::{self, get_project, GqlProject};
 use super::settings::GqlSettings;
 use super::user::LocalUser;
@@ -109,5 +110,39 @@ impl Query {
             .into_iter()
             .map(|row| GqlFileUpload { row })
             .collect())
+    }
+
+    /// All stored memories, newest first. Every memory is visible here —
+    /// distilled ones carry the chat that produced them.
+    async fn memories(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<GqlMemory>> {
+        let db = ctx.data::<Db>()?;
+        let conn = db.get()?;
+        Ok(crate::memories::list_memories(&conn)?
+            .into_iter()
+            .map(GqlMemory::from)
+            .collect())
+    }
+
+    /// Full-text search over transcripts: project-scoped by default (the
+    /// project of the conversation asking), `wholeVault` widens to all
+    /// chats, incognito chats always excluded. Tool-loop exposure lands in
+    /// 0004.
+    async fn search_history(
+        &self,
+        ctx: &Context<'_>,
+        query: String,
+        conversation_id: i64,
+        whole_vault: Option<bool>,
+    ) -> async_graphql::Result<Vec<GqlSearchResult>> {
+        let db = ctx.data::<Db>()?;
+        Ok(crate::retrieval::search_history(
+            db,
+            &query,
+            conversation_id,
+            whole_vault.unwrap_or(false),
+        )?
+        .into_iter()
+        .map(GqlSearchResult::from)
+        .collect())
     }
 }

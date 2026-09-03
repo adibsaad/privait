@@ -121,6 +121,35 @@ CREATE VIRTUAL TABLE memories USING vec0(
      CREATE INDEX idx_conversations_project ON conversations(project_id);
      ALTER TABLE files ADD COLUMN project_id INTEGER NULL REFERENCES projects(id) ON DELETE CASCADE;
      CREATE INDEX idx_files_project ON files(project_id);",
+    // v5 — the memory plane becomes inspectable: an id-carrying memories
+    // table (source + provenance + timestamps) with its vector index as a
+    // separate vec0 table (the old single-table sidecar had no writer and no
+    // rows in the wild). Plus per-chat incognito and FTS over transcripts.
+    "DROP TABLE memories;
+     CREATE TABLE memories (
+        id              INTEGER PRIMARY KEY,
+        content         TEXT NOT NULL,
+        source          TEXT NOT NULL CHECK (source IN ('manual', 'distilled')),
+        conversation_id INTEGER NULL REFERENCES conversations(id) ON DELETE SET NULL,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL
+     );
+     CREATE VIRTUAL TABLE memories_vec USING vec0(
+        embedding float[384] distance_metric=cosine,
+        +memory_id INTEGER
+     );
+     ALTER TABLE conversations ADD COLUMN incognito INTEGER NOT NULL DEFAULT 0;
+     CREATE VIRTUAL TABLE messages_fts USING fts5(content, content='messages', content_rowid='id');
+     CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
+        INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+     END;
+     CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
+        INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.id, old.content);
+     END;
+     CREATE TRIGGER messages_au AFTER UPDATE OF content ON messages BEGIN
+        INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.id, old.content);
+        INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
+     END;",
 ];
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
