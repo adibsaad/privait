@@ -4,6 +4,11 @@
 //!
 //! Localhost only, and launched manually — never bundled with the app.
 //!
+//! **Isolation:** verification sessions MUST set `PRIVAIT_DATA_DIR` (e.g.
+//! `PRIVAIT_DATA_DIR=$(mktemp -d) cargo run --example serve_dev`) so test
+//! traffic — uploads, chat sends, `saveSettings` — never touches real user
+//! data. Unset, it uses the real app-data dir (legacy behavior).
+//!
 //! Usage: `cargo run --example serve_dev`
 
 use privait_lib::{db, embeddings, files, jobs, schema, server, storage};
@@ -16,9 +21,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // The web frontend expects the API at http://localhost:3000.
     let listener = std::net::TcpListener::bind(("127.0.0.1", port))?;
 
-    let home = std::env::var("HOME").expect("HOME not set");
-    let data_dir =
-        std::path::PathBuf::from(home).join("Library/Application Support/app.privait.client");
+    let data_dir = match std::env::var("PRIVAIT_DATA_DIR") {
+        Ok(dir) => {
+            println!("PRIVAIT_DATA_DIR set — using isolated data dir: {dir}");
+            std::path::PathBuf::from(dir)
+        }
+        Err(_) => {
+            let home = std::env::var("HOME").expect("HOME not set");
+            std::path::PathBuf::from(home).join("Library/Application Support/app.privait.client")
+        }
+    };
     let db = db::init(&data_dir)?;
 
     let jobs = jobs::Jobs::init(&data_dir.join("jobs.db")).await?;
