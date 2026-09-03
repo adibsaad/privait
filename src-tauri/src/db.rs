@@ -150,6 +150,11 @@ CREATE VIRTUAL TABLE memories USING vec0(
         INSERT INTO messages_fts(messages_fts, rowid, content) VALUES ('delete', old.id, old.content);
         INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
      END;",
+    // v6 — backfill the transcript index: v5 created the external-content
+    // FTS table empty, so every message written before it existed was
+    // invisible to search. 'rebuild' re-reads the content table in one
+    // step; idempotent and harmless on fresh installs.
+    "INSERT INTO messages_fts(messages_fts) VALUES ('rebuild');",
 ];
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
@@ -158,11 +163,27 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     for (index, sql) in MIGRATIONS.iter().enumerate() {
         let target = (index + 1) as i64;
         if version < target {
-            conn.execute_batch(sql)?;
-            conn.pragma_update(None, "user_version", target)?;
+            apply_migration(conn, sql, target)?;
         }
     }
 
+    Ok(())
+}
+
+/// Applies one migration atomically: DDL, data backfills, and the version
+/// bump commit together, so a script that fails partway leaves the database
+/// exactly as it was — no partial DDL, version unadvanced, retryable at the
+/// next startup.
+fn apply_migration(conn: &Connection, sql: &str, target: i64) -> rusqlite::Result<()> {
+    let wrapped = format!(
+        "BEGIN;\n{sql}\nPRAGMA user_version = {target};\nCOMMIT;"
+    );
+    if let Err(err) = conn.execute_batch(&wrapped) {
+        // The failed batch leaves its transaction open on this connection —
+        // roll it back before surfacing the error.
+        let _ = conn.execute_batch("ROLLBACK;");
+        return Err(err);
+    }
     Ok(())
 }
 
@@ -197,6 +218,128 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let pool = init(dir.path()).unwrap();
         (dir, pool)
+    }
+
+    /// Builds a database at migration `count`, like an install from before
+    /// later migrations existed.
+    fn db_at_migration(dir: &TempDir, count: usize) -> Connection {
+        let conn = Connection::open(dir.path().join("privait.db")).unwrap();
+        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        for (index, sql) in MIGRATIONS.iter().take(count).enumerate() {
+            apply_migration(&conn, sql, (index + 1) as i64).unwrap();
+        }
+        conn
+    }
+
+    #[test]
+    fn failed_migration_leaves_no_partial_state() {
+        let (dir, _pool) = temp_db();
+        let conn = Connection::open(dir.path().join("privait.db")).unwrap();
+        let before: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+
+        // DDL succeeds, then the script dies: both must roll back together.
+        let broken = "CREATE TABLE broken_migration (id INTEGER PRIMARY KEY);
+             INSERT INTO no_such_table VALUES (1);";
+        assert!(apply_migration(&conn, broken, before + 1).is_err());
+
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'broken_migration'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(exists, 0, "partial DDL must roll back with the script");
+        let after: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(after, before, "version must not advance on failure");
+
+        // The connection is usable afterwards (transaction was released).
+        conn.execute("CREATE TABLE still_works (id INTEGER PRIMARY KEY)", [])
+            .unwrap();
+    }
+
+    #[test]
+    fn v3_database_upgrades_to_current_with_rows_and_search_intact() {
+        let dir = TempDir::new().unwrap();
+        let conn = db_at_migration(&dir, 3);
+
+        // Pre-projects data: a chat with a message, plus a message-linked
+        // file. Nothing knows about projects, incognito, or FTS yet.
+        conn.execute(
+            "INSERT INTO conversations (id, title, created_at, updated_at)
+             VALUES (1, 'pre-projects chat', '0', '0')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO messages (id, conversation_id, role, content, created_at)
+             VALUES (1, 1, 'USER', 'the March burnout note predates projects', '0')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO files (id, original_name, file_name, mime_type, size, kind,
+                                status, processed_at, created_at, message_id)
+             VALUES (1, 'old.txt', 'old-1.txt', 'text/plain', 1, 'TEXT',
+                     'PROCESSED', '0', '0', 1)",
+            [],
+        )
+        .unwrap();
+
+        // The upgrade under test: v3 → current (v5+v6 included).
+        migrate(&conn).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, MIGRATIONS.len() as i64);
+
+        // New surface exists...
+        for name in ["projects", "memories", "memories_vec", "messages_fts"] {
+            let exists: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name = ?1",
+                    [name],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(exists, 1, "{name} must exist after the upgrade");
+        }
+        let incognito: i64 = conn
+            .query_row(
+                "SELECT incognito FROM conversations WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(incognito, 0, "incognito defaults to off for old chats");
+
+        // ...and the old rows survived.
+        let (title, file_count): (String, i64) = conn
+            .query_row(
+                "SELECT title, (SELECT COUNT(*) FROM files WHERE message_id = 1)
+                 FROM conversations WHERE id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(title, "pre-projects chat");
+        assert_eq!(file_count, 1, "message-linked file survives the upgrade");
+
+        // The v6 backfill makes pre-existing transcripts searchable — the
+        // exact gap v5 shipped with.
+        let hits: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH ?1",
+                ["\"March burnout\""],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 1, "pre-migration messages must be searchable");
     }
 
     #[test]
