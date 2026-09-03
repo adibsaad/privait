@@ -14,6 +14,7 @@ use crate::embeddings::Embedder;
 use crate::files::{self, FileRow};
 use crate::provider::{ChatMessage, ChatProvider, ChatRequest, ChatRole, OpenAiCompatProvider};
 use crate::retrieval::{self, RetrievalInput};
+use crate::runs::{self, RunRegistry};
 use crate::storage::Storage;
 
 /// Shared failure type behind the `Error { message }` union arm pattern
@@ -693,6 +694,16 @@ impl Mutation {
             Err(message) => MutationDeleteFileUploadResult::Error(GqlError::new(message)),
         }
     }
+
+    /// Server-side half of the stop button: cancels the conversation's
+    /// in-flight reply; the pump task then persists whatever streamed so
+    /// far. `false` when no reply is in flight (late stop press).
+    async fn stop_run(&self, ctx: &Context<'_>, conversation_id: i64) -> bool {
+        match ctx.data::<Arc<RunRegistry>>() {
+            Ok(runs) => runs.cancel(conversation_id),
+            Err(_) => false,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -841,9 +852,13 @@ impl Subscription {
     /// empty when files are attached — the model then receives a synthesized
     /// instruction while the bubble keeps just the chips.
     ///
-    /// Kill switch: dropping the subscription (stop button / disconnect)
-    /// drops the receiver below; the pump task notices the failed send,
-    /// aborts the provider request, and persists the partial reply.
+    /// Run safety: one reply per conversation at a time — a second send while
+    /// a reply is streaming gets an `Error` arm instead of racing it. Stop
+    /// works two ways: dropping the subscription (stop button unsubscribe /
+    /// disconnect) drops the receiver below and the pump aborts on the next
+    /// send attempt, and the `stopRun` mutation cancels the run outright via
+    /// the run registry — which also aborts when no chunk is flowing. Either
+    /// way the partial reply is persisted.
     async fn conversation(
         &self,
         ctx: &Context<'_>,
@@ -908,6 +923,22 @@ impl Subscription {
                 ))
             }
         };
+
+        // One run per conversation: claim the slot before touching the
+        // transcript so a double send can't interleave two replies. The
+        // listener drives the pump's abort on `stopRun`; the guard frees the
+        // slot on every exit path — including a resolver error before the
+        // pump ever spawns, so a failed send can't wedge the chat.
+        let runs = ctx.data::<Arc<RunRegistry>>()?.clone();
+        let stop_signal = match runs.try_register(conversation_id) {
+            Some(stop_signal) => stop_signal,
+            None => {
+                return Ok(error_stream(
+                    "A reply is already being generated in this chat — stop it first or wait for it to finish",
+                ))
+            }
+        };
+        let run_guard = runs::finish_guard(runs.clone(), conversation_id);
 
         let history = select_messages(&conn, conversation_id)?;
         let user_message_id = insert_message(&conn, conversation_id, "USER", &message)?;
@@ -1002,6 +1033,10 @@ impl Subscription {
             .map(|t| t.0)
             .unwrap_or(Duration::from_secs(30));
         tokio::spawn(async move {
+            // Frees the conversation's run slot whenever the pump ends
+            // (done, error, subscriber dropped, cancelled, panic).
+            let _run_guard = run_guard;
+
             let request = ChatRequest {
                 model: provider.model().to_string(),
                 messages: request_messages,
@@ -1009,39 +1044,45 @@ impl Subscription {
 
             let mut accumulated = String::new();
             let mut failed = false;
+            let mut stopped = false;
 
             // Connection, response headers, and the first chunk share one
             // budget: a provider that stalls anywhere before streaming must
             // surface as an Error arm instead of an endless spinner. Once
-            // streaming, slower generations are expected.
-            let opened = match tokio::time::timeout(first_chunk_timeout, async {
-                let mut stream = provider.stream_chat(request).await?;
-                let first = stream.next().await;
-                Ok::<_, crate::provider::ProviderError>((stream, first))
-            })
-            .await
-            {
-                Ok(Ok(outcome)) => Some(outcome),
-                Ok(Err(err)) => {
-                    let _ = tx
-                        .send(SubscriptionConversationResult::Error(GqlError::new(
-                            err.to_string(),
-                        )))
-                        .await;
-                    failed = true;
+            // streaming, slower generations are expected. Stop races the
+            // open phase so a quick stop aborts the connect too.
+            let opened = tokio::select! {
+                _ = runs::cancelled(stop_signal.clone()) => {
+                    stopped = true;
                     None
                 }
-                Err(_) => {
-                    let _ = tx
-                        .send(SubscriptionConversationResult::Error(GqlError::new(
-                            format!(
-                                "Provider did not respond within {}s",
-                                first_chunk_timeout.as_secs()
-                            ),
-                        )))
-                        .await;
-                    failed = true;
-                    None
+                open_outcome = tokio::time::timeout(first_chunk_timeout, async {
+                    let mut stream = provider.stream_chat(request).await?;
+                    let first = stream.next().await;
+                    Ok::<_, crate::provider::ProviderError>((stream, first))
+                }) => match open_outcome {
+                    Ok(Ok(outcome)) => Some(outcome),
+                    Ok(Err(err)) => {
+                        let _ = tx
+                            .send(SubscriptionConversationResult::Error(GqlError::new(
+                                err.to_string(),
+                            )))
+                            .await;
+                        failed = true;
+                        None
+                    }
+                    Err(_) => {
+                        let _ = tx
+                            .send(SubscriptionConversationResult::Error(GqlError::new(
+                                format!(
+                                    "Provider did not respond within {}s",
+                                    first_chunk_timeout.as_secs()
+                                ),
+                            )))
+                            .await;
+                        failed = true;
+                        None
+                    }
                 }
             };
 
@@ -1050,8 +1091,23 @@ impl Subscription {
                 loop {
                     let item = match pending_first.take() {
                         Some(item) => item,
-                        None => stream.next().await,
+                        None => {
+                            // Stop must abort promptly even when the
+                            // provider has stopped sending chunks.
+                            tokio::select! {
+                                _ = runs::cancelled(stop_signal.clone()) => {
+                                    stopped = true;
+                                    break;
+                                }
+                                item = stream.next() => item,
+                            }
+                        }
                     };
+
+                    if runs::is_cancelled(&stop_signal) {
+                        stopped = true;
+                        break;
+                    }
 
                     match item {
                         Some(Ok(chunk)) => {
@@ -1110,14 +1166,20 @@ impl Subscription {
                 }
             }
 
-            // Persist whatever was generated (full or partial). The empty
-            // placeholder row always gets replaced.
+            // Persist whatever was generated (full, partial, or nothing — a
+            // stop that landed before the first chunk deletes the empty
+            // placeholder instead of leaving a ghost bubble).
             let content = accumulated;
             if let Ok(conn) = chunk_db.get() {
-                let _ = conn.execute(
-                    "UPDATE messages SET content = ?1 WHERE id = ?2",
-                    params![content, assistant_message_id],
-                );
+                if stopped && content.is_empty() {
+                    let _ = conn
+                        .execute("DELETE FROM messages WHERE id = ?1", [assistant_message_id]);
+                } else {
+                    let _ = conn.execute(
+                        "UPDATE messages SET content = ?1 WHERE id = ?2",
+                        params![content, assistant_message_id],
+                    );
+                }
             }
         });
 
@@ -1171,6 +1233,7 @@ pub fn build_schema_with_context(ctx: SchemaContext, timeout: Duration) -> AppSc
         .data(ctx.storage)
         .data(ctx.embedder)
         .data(FirstChunkTimeout(timeout))
+        .data(Arc::new(RunRegistry::new()))
         .finish()
 }
 
@@ -1537,6 +1600,204 @@ mod tests {
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
+    }
+
+    const STOP_RUN_MUTATION: &str = r#"
+        mutation StopRun($conversationId: Int!) {
+            stopRun(conversationId: $conversationId)
+        }
+    "#;
+
+    async fn execute_stop_run(schema: &AppSchema, conversation_id: i64) -> bool {
+        let response = schema
+            .execute(
+                async_graphql::Request::new(STOP_RUN_MUTATION).variables(
+                    async_graphql::Variables::from_value(async_graphql::value!({
+                        "conversationId": conversation_id,
+                    })),
+                ),
+            )
+            .await;
+        let data = response.into_result().unwrap().data;
+        serde_json::to_value(data).unwrap()["stopRun"]
+            .as_bool()
+            .unwrap()
+    }
+
+    async fn assistant_content(conn: &Connection) -> Option<String> {
+        conn.query_row(
+            "SELECT content FROM messages WHERE role = 'ASSISTANT' LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    }
+
+    async fn wait_for_partial(conn: &Connection, partial: &str) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let content = assistant_content(conn).await;
+            if content.as_deref() == Some(partial) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "assistant message was not persisted as partial: {content:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn second_send_while_streaming_is_rejected_and_the_slot_is_freed_after() {
+        let db = test_db();
+        {
+            let conn = db.get().unwrap();
+            let base_url = spawn_mock_provider(vec!["one ", "two ", "three ", "four"], 150).await;
+            seed_provider_settings(&conn, &base_url).await;
+        }
+        let schema = schema_with(db.clone());
+
+        // First send: creates the conversation; hold the subscription open.
+        let mut stream = schema.execute_stream(subscription_request(None, "hi"));
+        let first = stream.next().await.unwrap();
+        let conversation_id = payload_item(first)["conversation"]["data"]["conversationId"]
+            .as_str()
+            .unwrap()
+            .parse::<i64>()
+            .unwrap();
+
+        // A second send on the same conversation is rejected before any
+        // message rows are written.
+        let mut second = schema.execute_stream(subscription_request(Some(conversation_id), "again"));
+        let rejected = second.next().await.unwrap();
+        let payload = payload_item(rejected);
+        assert_eq!(payload["conversation"]["__typename"], json!("Error"));
+        assert!(
+            error_message(&payload)
+                .unwrap()
+                .contains("already being generated"),
+            "got: {:?}",
+            error_message(&payload)
+        );
+        let conn = db.get().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM messages WHERE conversation_id = ?1",
+                [conversation_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2, "only the first send's user + assistant rows");
+
+        // Once the first run ends (drop = the old stop path), the slot frees
+        // and the conversation accepts sends again.
+        drop(stream);
+        wait_for_partial(&conn, "one ").await;
+        let mut third = schema.execute_stream(subscription_request(Some(conversation_id), "third"));
+        let response = third.next().await.unwrap();
+        assert_eq!(
+            payload_item(response)["conversation"]["__typename"],
+            json!("SubscriptionConversationSuccess"),
+            "run slot must free after the run ends"
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_run_cancels_the_in_flight_reply_and_persists_the_partial() {
+        let db = test_db();
+        {
+            let conn = db.get().unwrap();
+            let base_url =
+                spawn_mock_provider(vec!["part-one ", "part-two ", "part-three"], 300).await;
+            seed_provider_settings(&conn, &base_url).await;
+        }
+        let schema = schema_with(db.clone());
+
+        let mut stream = schema.execute_stream(subscription_request(None, "hi"));
+        let first = stream.next().await.unwrap();
+        let conversation_id = payload_item(first)["conversation"]["data"]["conversationId"]
+            .as_str()
+            .unwrap()
+            .parse::<i64>()
+            .unwrap();
+
+        assert!(
+            execute_stop_run(&schema, conversation_id).await,
+            "a run is in flight"
+        );
+
+        // The pump must abort promptly — well before the next scheduled
+        // chunk — and persist the partial reply.
+        let conn = db.get().unwrap();
+        wait_for_partial(&conn, "part-one ").await;
+        drop(stream);
+
+        // Slot freed: nothing in flight anymore, and a follow-up send works.
+        assert!(!execute_stop_run(&schema, conversation_id).await);
+        let mut second = schema.execute_stream(subscription_request(Some(conversation_id), "again"));
+        let response = second.next().await.unwrap();
+        assert_eq!(
+            payload_item(response)["conversation"]["__typename"],
+            json!("SubscriptionConversationSuccess")
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_before_the_first_chunk_removes_the_empty_placeholder() {
+        let db = test_db();
+        {
+            let conn = db.get().unwrap();
+            let base_url = spawn_mock_provider(vec!["late"], 600).await;
+            seed_provider_settings(&conn, &base_url).await;
+        }
+        let schema = schema_with(db.clone());
+
+        let mut stream = schema.execute_stream(subscription_request(None, "hi"));
+        // Drive the resolver (conversation creation, run registration, the
+        // placeholder insert) without consuming a chunk — the mock's first
+        // chunk is 600ms out, so this poll times out empty.
+        let polled = tokio::time::timeout(Duration::from_millis(100), stream.next()).await;
+        assert!(polled.is_err(), "no chunk should have arrived yet");
+        // Stop before any chunk can arrive.
+        let conversation_id: i64 = conn_last_conversation_id(&db);
+        assert!(execute_stop_run(&schema, conversation_id).await);
+        drop(stream);
+
+        let conn = db.get().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let assistants: i64 = conn
+                .query_row("SELECT COUNT(*) FROM messages WHERE role = 'ASSISTANT'", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            if assistants == 0 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "empty assistant placeholder was not removed"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        // The user message survives the stop.
+        let users: i64 = conn
+            .query_row("SELECT COUNT(*) FROM messages WHERE role = 'USER'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(users, 1);
+    }
+
+    fn conn_last_conversation_id(db: &Db) -> i64 {
+        let conn = db.get().unwrap();
+        conn.query_row(
+            "SELECT id FROM conversations ORDER BY id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
     }
 
     #[tokio::test]

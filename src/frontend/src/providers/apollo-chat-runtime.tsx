@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { gql } from '@apollo/client'
@@ -28,6 +28,7 @@ import {
   DeleteConversationDocument,
   GetConversationDocument,
   RenameConversationDocument,
+  StopRunDocument,
   UploadFileDocument,
 } from '@frontend/graphql/output/graphql'
 import {
@@ -127,6 +128,10 @@ gql(/* GraphQL */ `
       }
     }
   }
+
+  mutation StopRun($conversationId: Int!) {
+    stopRun(conversationId: $conversationId)
+  }
 `)
 
 /** Same allowlist the backend enforces (files.rs). */
@@ -205,11 +210,16 @@ export function ApolloChatRuntimeProvider({
     fileIds: number[] | null
   }>({ msg: '', conversationId: null, fileIds: null })
   const [skipSub, skipSubSet] = useState(true)
-  const [isRunning, isRunningSet] = useState(false)
+  // Which conversation is generating, server-tracked via the run registry.
+  // `isRunning` is per-thread: a streaming chat must not freeze other
+  // chats' composers, and coming back to it must show it still running.
+  const [runningThreadId, runningThreadIdSet] = useState<string | null>(null)
+  const runningThreadIdRef = useRef<string | null>(null)
   const [deleteConversationMut] = useMutation(DeleteConversationDocument)
   const [renameConversationMut] = useMutation(RenameConversationDocument)
   const [archiveConversationMut] = useMutation(ArchiveConversationDocument)
   const [uploadFileMut] = useMutation(UploadFileDocument)
+  const [stopRunMut] = useMutation(StopRunDocument)
   const [loadConversation] = useLazyQuery(GetConversationDocument)
   const apolloClient = useApolloClient()
   const { adapter, takeFiles } = useComposerAttachmentAdapter()
@@ -249,6 +259,17 @@ export function ApolloChatRuntimeProvider({
     threads,
     setThreads,
   } = useThreadContext()
+
+  // Stream callbacks read the selection fresh (subscription callbacks can
+  // hold stale closures while chunks keep arriving across navigations).
+  const currentThreadIdRef = useRef(currentThreadId)
+  useEffect(() => {
+    currentThreadIdRef.current = currentThreadId
+  }, [currentThreadId])
+  useEffect(() => {
+    runningThreadIdRef.current = runningThreadId
+  }, [runningThreadId])
+  const isRunning = currentThreadId === runningThreadId
   const threadListAdapter: ExternalStoreThreadListAdapter = {
     threadId: currentThreadId,
     threads: threadList,
@@ -371,14 +392,14 @@ export function ApolloChatRuntimeProvider({
           newMessage.data.data?.conversation?.message ?? 'Chat failed'
         toast.error(message)
         skipSubSet(true)
-        isRunningSet(false)
+        runningThreadIdSet(null)
         gotFirstChunkRef.current = false
         return
       }
 
       if (newMessage.data.data?.conversation?.data.done) {
         skipSubSet(true)
-        isRunningSet(false)
+        runningThreadIdSet(null)
         gotFirstChunkRef.current = false
       } else {
         const threadId = newMessage.data.data?.conversation?.data.conversationId
@@ -409,6 +430,14 @@ export function ApolloChatRuntimeProvider({
 
           setThreadList(prev => reconcileThreadList(prev, threadId))
 
+          // A brand-new chat was parked on the empty view — follow it to
+          // its real id. A streaming chat that isn't on screen must NOT
+          // yank the viewport back: chunks append to their own thread.
+          if (currentThreadIdRef.current === EMPTY_THREAD_ID) {
+            setCurrentThreadId(threadId)
+            runningThreadIdSet(threadId)
+          }
+
           loadConversation({
             variables: {
               id: Number(threadId),
@@ -438,8 +467,6 @@ export function ApolloChatRuntimeProvider({
         setThreads(prev =>
           appendAssistantChunk(prev, threadId, messageId, chunk),
         )
-
-        setCurrentThreadId(threadId)
       }
     },
     skip: skipSub,
@@ -456,6 +483,16 @@ export function ApolloChatRuntimeProvider({
             (firstPart as { type?: unknown }).type === 'text'
           ? String((firstPart as { text?: unknown }).text ?? '')
           : ''
+
+    // One stream per subscription: sending from another chat supersedes the
+    // in-flight run. Ask the backend to abort it (its partial reply is
+    // persisted there) before re-pointing the subscription.
+    const supersededThreadId = runningThreadIdRef.current
+    if (supersededThreadId && supersededThreadId !== currentThreadId) {
+      stopRunMut({
+        variables: { conversationId: Number(supersededThreadId) },
+      }).catch(() => {})
+    }
 
     // Files ride on the outgoing message via the attachment adapter; send
     // them first, then open the streaming subscription with their ids. The
@@ -512,16 +549,23 @@ export function ApolloChatRuntimeProvider({
       conversationId: Number(currentThreadId),
       fileIds,
     })
+    runningThreadIdSet(currentThreadId)
     gotFirstChunkRef.current = false
     skipSubSet(false)
-    isRunningSet(true)
   }
 
-  // Stop button: unsubscribe; the backend drops the stream on `complete`
-  // and aborts the provider request, keeping the partial reply.
+  // Stop button: ask the backend to abort the run (it cancels the provider
+  // request even mid-stall and keeps the partial reply), then unsubscribe.
+  // The backend's receiver-drop kill switch stays as the fallback path.
   const onCancel = async () => {
+    const threadId = runningThreadIdRef.current
+    if (threadId && Number(threadId)) {
+      stopRunMut({
+        variables: { conversationId: Number(threadId) },
+      }).catch(() => {})
+    }
     skipSubSet(true)
-    isRunningSet(false)
+    runningThreadIdSet(null)
     gotFirstChunkRef.current = false
   }
 

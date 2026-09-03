@@ -247,6 +247,7 @@ sequenceDiagram
 | OpenAI-compatible provider abstraction               | One client covers cloud providers _and_ local servers (ollama, LM Studio, llama.cpp-server); a native in-process llama.cpp binding lands before RC.                                                                                           |
 | Per-chat file grounding, files linked to messages    | Grounding scope matches mental scope ("this chat knows what I attached here"), and per-message links let chips re-render on the exact bubble that carried them.                                                                               |
 | Vector search around vec0's quirks                   | The similarity threshold (≥ 0.5) is enforced in SQL — vec0's planner leaves `distance` constraints to SQLite's per-row filter. Conversation scoping stays app-side because a JOIN defeats vec0's fast KNN — exact and cheap at desktop scale. |
+| Per-conversation run registry (in-memory, `runs.rs`) | The backend owns run state: one reply per chat at a time, a second send is rejected instead of racing, and the `stopRun` mutation aborts a run even when no chunk is flowing. Entries free via a drop guard in the pump task, so every exit path cleans up. |
 | API keys in the settings table (for now)             | OS keychain storage is planned before release.                                                                                                                                                                                                |
 
 ## History

@@ -112,6 +112,12 @@ export type Mutation = {
   renameConversation: MutationRenameConversationResult
   saveSettings: MutationSaveSettingsResult
   /**
+   * Server-side half of the stop button: cancels the conversation's
+   * in-flight reply; the pump task then persists whatever streamed so
+   * far. `false` when no reply is in flight (late stop press).
+   */
+  stopRun: Scalars['Boolean']['output']
+  /**
    * Persists a validated upload (5MB cap, MIME allowlist) to storage and
    * the `files` table, then runs the extract → chunk → embed pipeline
    * inline and returns the PROCESSED row. Upload happens on send, so the
@@ -142,6 +148,10 @@ export type MutationRenameConversationArgs = {
 
 export type MutationSaveSettingsArgs = {
   input: SettingsInput
+}
+
+export type MutationStopRunArgs = {
+  conversationId: Scalars['Int']['input']
 }
 
 export type MutationUploadFileArgs = {
@@ -241,9 +251,13 @@ export type Subscription = {
    * empty when files are attached — the model then receives a synthesized
    * instruction while the bubble keeps just the chips.
    *
-   * Kill switch: dropping the subscription (stop button / disconnect)
-   * drops the receiver below; the pump task notices the failed send,
-   * aborts the provider request, and persists the partial reply.
+   * Run safety: one reply per conversation at a time — a second send while
+   * a reply is streaming gets an `Error` arm instead of racing it. Stop
+   * works two ways: dropping the subscription (stop button unsubscribe /
+   * disconnect) drops the receiver below and the pump aborts on the next
+   * send attempt, and the `stopRun` mutation cancels the run outright via
+   * the run registry — which also aborts when no chunk is flowing. Either
+   * way the partial reply is persisted.
    */
   conversation: SubscriptionConversationResult
 }
@@ -409,6 +423,12 @@ export type ArchiveConversationMutation = {
     | { __typename: 'Error'; message: string }
     | { __typename: 'MutationArchiveConversationSuccess' }
 }
+
+export type StopRunMutationVariables = Exact<{
+  conversationId: Scalars['Int']['input']
+}>
+
+export type StopRunMutation = { __typename?: 'Mutation'; stopRun: boolean }
 
 export type AllConversationsQueryVariables = Exact<{ [key: string]: never }>
 
@@ -1188,6 +1208,48 @@ export const ArchiveConversationDocument = {
   ArchiveConversationMutation,
   ArchiveConversationMutationVariables
 >
+export const StopRunDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'mutation',
+      name: { kind: 'Name', value: 'StopRun' },
+      variableDefinitions: [
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'conversationId' },
+          },
+          type: {
+            kind: 'NonNullType',
+            type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
+          },
+        },
+      ],
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'stopRun' },
+            arguments: [
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'conversationId' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'conversationId' },
+                },
+              },
+            ],
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<StopRunMutation, StopRunMutationVariables>
 export const AllConversationsDocument = {
   kind: 'Document',
   definitions: [

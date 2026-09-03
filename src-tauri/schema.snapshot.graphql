@@ -82,6 +82,12 @@ type Mutation {
 	Removes the upload, its stored bytes, and its vector chunks.
 	"""
 	deleteFileUpload(fileId: Int!): MutationDeleteFileUploadResult!
+	"""
+	Server-side half of the stop button: cancels the conversation's
+	in-flight reply; the pump task then persists whatever streamed so
+	far. `false` when no reply is in flight (late stop press).
+	"""
+	stopRun(conversationId: Int!): Boolean!
 }
 
 union MutationArchiveConversationResult = Error | MutationArchiveConversationSuccess
@@ -162,9 +168,13 @@ type Subscription {
 	empty when files are attached — the model then receives a synthesized
 	instruction while the bubble keeps just the chips.
 	
-	Kill switch: dropping the subscription (stop button / disconnect)
-	drops the receiver below; the pump task notices the failed send,
-	aborts the provider request, and persists the partial reply.
+	Run safety: one reply per conversation at a time — a second send while
+	a reply is streaming gets an `Error` arm instead of racing it. Stop
+	works two ways: dropping the subscription (stop button unsubscribe /
+	disconnect) drops the receiver below and the pump aborts on the next
+	send attempt, and the `stopRun` mutation cancels the run outright via
+	the run registry — which also aborts when no chunk is flowing. Either
+	way the partial reply is persisted.
 	"""
 	conversation(conversationId: Int, message: String!, fileIds: [Int!]): SubscriptionConversationResult!
 }

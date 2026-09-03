@@ -5,6 +5,7 @@ pub mod files;
 pub mod jobs;
 pub mod provider;
 pub mod retrieval;
+pub mod runs;
 pub mod schema;
 pub mod server;
 pub mod storage;
