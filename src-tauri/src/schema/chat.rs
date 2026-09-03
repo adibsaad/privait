@@ -353,18 +353,30 @@ impl Subscription {
         };
 
         // One run per conversation: claim the slot before touching the
-        // transcript so a double send can't interleave two replies. The
-        // listener drives the pump's abort on `stopRun`; the guard frees the
-        // slot on every exit path — including a resolver error before the
-        // pump ever spawns, so a failed send can't wedge the chat.
+        // transcript so a double send can't interleave two replies. Streams
+        // beyond the concurrency cap (settings `runs.maxConcurrent`, default
+        // 2) hold their subscription open and start FIFO. The listener
+        // drives the pump's abort on `stopRun`; the guard frees the slot on
+        // every exit path — including a resolver error before the pump ever
+        // spawns, so a failed send can't wedge the chat.
         let runs = ctx.data::<Arc<RunRegistry>>()?.clone();
-        let stop_signal = match runs.try_register(conversation_id) {
-            Some(stop_signal) => stop_signal,
+        let max_concurrent = db::get_setting(&conn, "runs.maxConcurrent")
+            .ok()
+            .flatten()
+            .and_then(|raw| raw.parse::<usize>().ok())
+            .filter(|&max| max >= 1)
+            .unwrap_or(2);
+        let claim = match runs.try_register(conversation_id, max_concurrent) {
+            Some(claim) => claim,
             None => {
                 return Ok(error_stream(
                     "A reply is already being generated in this chat — stop it first or wait for it to finish",
                 ))
             }
+        };
+        let (stop_signal, queued_turn) = match claim {
+            runs::RunClaim::Started(cancel) => (cancel, None),
+            runs::RunClaim::Queued { cancel, turn } => (cancel, Some(turn)),
         };
         let run_guard = runs::finish_guard(runs.clone(), conversation_id);
 
@@ -528,12 +540,30 @@ impl Subscription {
             let mut last_flush = tokio::time::Instant::now();
             const FLUSH_INTERVAL: Duration = Duration::from_millis(500);
 
+            // Queued runs hold their subscription open until a slot frees;
+            // stop works while waiting (nothing persisted → placeholder
+            // deleted by the tail below). While waiting, no DB connection
+            // is held.
+            if let Some(turn) = queued_turn {
+                tokio::select! {
+                    _ = runs::cancelled(stop_signal.clone()) => {
+                        stopped = true;
+                    }
+                    _ = runs::turn_arrived(turn) => {}
+                }
+            }
+            let queued_stop = stopped;
+            stopped = false;
+
             // Connection, response headers, and the first chunk share one
             // budget: a provider that stalls anywhere before streaming must
             // surface as an Error arm instead of an endless spinner. Once
             // streaming, slower generations are expected. Stop races the
             // open phase so a quick stop aborts the connect too.
-            let opened = tokio::select! {
+            let opened = if queued_stop {
+                None
+            } else {
+                tokio::select! {
                 _ = runs::cancelled(stop_signal.clone()) => {
                     stopped = true;
                     None
@@ -565,6 +595,7 @@ impl Subscription {
                         failed = true;
                         None
                     }
+                }
                 }
             };
 

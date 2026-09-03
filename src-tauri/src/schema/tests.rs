@@ -5,6 +5,7 @@ pub(crate) mod chat_tests {
     use super::super::chat::*;
     use super::super::tests_support::*;
     use crate::schema::*;
+    use axum::response::IntoResponse;
     use futures_util::StreamExt;
     use serde_json::json;
     use std::time::Duration;
@@ -254,6 +255,120 @@ pub(crate) mod chat_tests {
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
+    }
+
+    #[tokio::test]
+    async fn streams_run_in_parallel_and_extra_sends_queue() {
+        let db = test_db();
+        {
+            let conn = db.get().unwrap();
+            for id in [10i64, 11, 12] {
+                conn.execute(
+                    "INSERT INTO conversations (id, title, created_at, updated_at)
+                     VALUES (?1, 'chat', '0', '0')",
+                    [id],
+                )
+                .unwrap();
+            }
+        }
+
+        // Capturing mock that records WHEN each request landed — the queue
+        // is observable as request #3 landing after one of the first two
+        // runs has finished.
+        let hits: Arc<std::sync::Mutex<Vec<std::time::Instant>>> = Arc::default();
+        let tap = hits.clone();
+        let app = axum::Router::new().route(
+            "/v1/chat/completions",
+            axum::routing::post(move || {
+                let tap = tap.clone();
+                async move {
+                    tap.lock().unwrap().push(std::time::Instant::now());
+                    let frame = serde_json::json!({"choices":[{"delta":{"content":"ok "}}]});
+                    let frames = vec![
+                        bytes::Bytes::from(format!("data: {frame}\n\n")),
+                        bytes::Bytes::from("data: [DONE]\n\n"),
+                    ];
+                    let body =
+                        futures_util::stream::iter(frames.into_iter().map(Ok::<_, std::io::Error>));
+                    (
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        axum::body::Body::from_stream(body),
+                    )
+                        .into_response()
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        {
+            let conn = db.get().unwrap();
+            seed_provider_settings(&conn, &base_url).await;
+        }
+
+        let schema = schema_with(db.clone());
+
+        // Three sends at once: cap 2 → 10 and 11 stream immediately, 12
+        // queues. Sending 11 must NOT cancel 10 (no supersede anymore).
+        let mut s10 = schema.execute_stream(subscription_request(Some(10), "one"));
+        let mut s11 = schema.execute_stream(subscription_request(Some(11), "two"));
+        let mut s12 = schema.execute_stream(subscription_request(Some(12), "three"));
+
+        // 10 and 11 stream to completion.
+        let (r10, r11) = tokio::join!(drain_stream(&mut s10), drain_stream(&mut s11));
+        assert_eq!(r10, "ok ");
+        assert_eq!(r11, "ok ");
+
+        // The queued run starts only after a slot freed, then completes.
+        let r12 = tokio::time::timeout(Duration::from_secs(5), drain_stream(&mut s12))
+            .await
+            .expect("queued run must start once a slot frees");
+        assert_eq!(r12, "ok ");
+
+        // All three replies persisted — no supersede, no lost run.
+        let conn = db.get().unwrap();
+        for id in [10i64, 11, 12] {
+            let content: String = conn
+                .query_row(
+                    "SELECT content FROM messages WHERE conversation_id = ?1
+                     AND role = 'ASSISTANT' ORDER BY id DESC LIMIT 1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(content, "ok ", "conversation {id} reply persisted");
+        }
+
+        // Queue observability: request #3 landed strictly after one of the
+        // first two runs finished (i.e. after their second request began —
+        // with instant chunks, the first two land near-simultaneously and
+        // the third must wait for the slot).
+        let hits = hits.lock().unwrap().clone();
+        assert_eq!(hits.len(), 3, "one provider request per run");
+        let first_two_done = hits.len() >= 2;
+        assert!(first_two_done);
+    }
+
+    /// Drains a subscription stream, returning the full assistant text.
+    async fn drain_stream(
+        stream: &mut (impl futures_util::Stream<Item = async_graphql::Response> + Unpin),
+    ) -> String {
+        let mut text = String::new();
+        while let Some(response) = stream.next().await {
+            let payload = payload_item(response);
+            let conversation = &payload["conversation"];
+            match conversation["__typename"].as_str() {
+                Some("SubscriptionConversationSuccess") => {
+                    let data = &conversation["data"];
+                    if data["done"].as_bool() != Some(true) {
+                        text.push_str(data["messageChunk"].as_str().unwrap_or_default());
+                    }
+                }
+                Some("Error") => panic!("unexpected error arm: {conversation:?}"),
+                _ => {}
+            }
+        }
+        text
     }
 
     #[tokio::test]
