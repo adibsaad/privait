@@ -1039,7 +1039,6 @@ pub(crate) mod mutation_tests {
     use tower::ServiceExt;
 
     use crate::db::{self};
-    use rusqlite::params;
 
     #[tokio::test]
     async fn delete_conversation_mutation_removes_rows() {
@@ -2083,9 +2082,6 @@ pub(crate) mod mutation_tests {
     #[tokio::test]
     async fn incognito_chats_read_no_memories_and_stay_out_of_search() {
         let db = test_db();
-        let embedder: Arc<dyn Embedder> = Arc::new(crate::embeddings::FakeEmbedder::by_keyword(&[
-            "march", "other",
-        ]));
         {
             let conn = db.get().unwrap();
             conn.execute(
