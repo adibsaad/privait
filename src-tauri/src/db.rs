@@ -335,8 +335,8 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
 
-        // The threshold is applied to the KNN results app-side (vec0 does not
-        // accept `distance` as a WHERE filter): similarity = 1 - distance.
+        // Similarity = 1 - distance: "keep" and "borderline" sit inside the
+        // inclusive 0.5 edge, "drop" fails it.
         let above_threshold: Vec<&str> = knn
             .iter()
             .filter(|(_, distance)| (1.0 - *distance) >= 0.5 - f64::EPSILON)
@@ -347,5 +347,69 @@ mod tests {
         assert!(above_threshold.contains(&"borderline"));
         assert!(!above_threshold.contains(&"drop"));
         assert_eq!(knn.len(), 3);
+    }
+
+    #[test]
+    fn vec0_knn_applies_the_distance_filter_in_sql() {
+        let (_dir, pool) = temp_db();
+        let conn = pool.get().unwrap();
+
+        // Unit vectors at exact angles from the query (1,0,…), in stored
+        // order unrelated to rank: "far" (0.6) ranks before "hidden" (0.3).
+        // cosine distance = 1 - cos θ, so unit(lead) has distance 1 - lead.
+        let unit = |lead: f32| {
+            let mut embedding = vec![0.0f32; 384];
+            embedding[0] = lead;
+            embedding[1] = (1.0 - lead * lead).sqrt();
+            embedding_to_blob(&embedding)
+        };
+
+        for (content, lead) in [
+            ("far", 0.4f32),     // distance 0.6 — fails
+            ("borderline", 0.5), // distance 0.5 — inclusive edge, passes
+            ("orthogonal", 0.0), // distance 1.0 — fails
+            ("exact", 1.0),      // distance 0.0
+            ("hidden", 0.7),     // distance 0.3 — passes, rank 4 of 5
+        ] {
+            conn.execute(
+                "INSERT INTO file_chunks (embedding, content, file_id) VALUES (?1, ?2, 1)",
+                rusqlite::params![unit(lead), content],
+            )
+            .unwrap();
+        }
+
+        let query_blob = unit(1.0);
+
+        // Literal threshold in the KNN query's WHERE: SQLite core filters
+        // per-row (vec0 leaves distance constraints unconsumed). Strict
+        // comparison sidesteps f32 rounding at the 0.5 edge.
+        let mut stmt = conn
+            .prepare(
+                "SELECT content FROM file_chunks
+                 WHERE embedding MATCH ?1 AND distance < 0.4 ORDER BY distance LIMIT 10",
+            )
+            .unwrap();
+        let literal: Vec<String> = stmt
+            .query_map([query_blob.clone()], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(literal, vec!["exact", "hidden"]);
+
+        // Parameterized threshold (what retrieval.rs ships).
+        let mut stmt = conn
+            .prepare(
+                "SELECT content FROM file_chunks
+                 WHERE embedding MATCH ?1 AND distance <= ?2 ORDER BY distance LIMIT 10",
+            )
+            .unwrap();
+        let parameterized: Vec<String> = stmt
+            .query_map(rusqlite::params![query_blob, 0.5 + f64::EPSILON], |row| {
+                row.get(0)
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(parameterized, vec!["exact", "hidden", "borderline"]);
     }
 }
