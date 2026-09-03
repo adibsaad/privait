@@ -108,6 +108,9 @@ const EXPECTED_DIFF = [
   'Mutation: + archiveConversation: (archived: Boolean!, conversationId: Int!): MutationArchiveConversationResult!',
   'Mutation: + renameConversation: (conversationId: Int!, title: String!): MutationRenameConversationResult!',
   'Mutation: + saveSettings: (input: SettingsInput!): MutationSaveSettingsResult!',
+  // 0001 run registry: server-side half of the stop button (see the
+  // per-conversation run registry row in docs/architecture.md).
+  'Mutation: + stopRun: (conversationId: Int!): Boolean!',
   'Mutation: - completeMagicLink: (token: String!): MutationCompleteMagicLinkResult!',
   'Mutation: - magicLink: (email: String!): MutationMagicLinkResult!',
   // Documented M2/M3 additions
