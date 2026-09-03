@@ -39,10 +39,12 @@ impl MessageRole {
 
 /// A persisted conversation. `archived` is thread-sidebar state (rename and
 /// archive are now persisted — they were client-only in the web app).
+/// `project_id` scopes the chat to a project (None = plain chat).
 pub struct GqlConversation {
     pub id: i64,
     pub title: String,
     pub archived: bool,
+    pub project_id: Option<i64>,
 }
 
 #[Object(name = "Conversation")]
@@ -57,6 +59,11 @@ impl GqlConversation {
 
     async fn archived(&self) -> bool {
         self.archived
+    }
+
+    #[graphql(name = "projectId")]
+    async fn project_id(&self) -> Option<i64> {
+        self.project_id
     }
 
     async fn messages(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<GqlMessage>> {
@@ -263,6 +270,7 @@ impl Subscription {
         conversation_id: Option<i64>,
         message: String,
         file_ids: Option<Vec<i64>>,
+        project_id: Option<i64>,
     ) -> async_graphql::Result<ReceiverStream<SubscriptionConversationResult>> {
         let db = ctx.data::<Db>()?.clone();
         let conn = db.get()?;
@@ -294,6 +302,24 @@ impl Subscription {
                 }
             }
             None => {
+                // A first send can open the chat inside a project; the
+                // project must exist so a lying client can't invent one.
+                let scoped_project = match project_id {
+                    Some(project_id) => {
+                        let exists: Option<i64> = conn
+                            .query_row(
+                                "SELECT id FROM projects WHERE id = ?1",
+                                [project_id],
+                                |row| row.get(0),
+                            )
+                            .optional()?;
+                        if exists.is_none() {
+                            return Ok(error_stream("Project not found"));
+                        }
+                        Some(project_id)
+                    }
+                    None => None,
+                };
                 let now = now_iso();
                 // A file-only first message titles the thread from its first
                 // file; otherwise from the prompt.
@@ -302,8 +328,9 @@ impl Subscription {
                     false => conversation_title(&message),
                 };
                 conn.execute(
-                    "INSERT INTO conversations (title, created_at, updated_at) VALUES (?1, ?2, ?3)",
-                    params![title, now, now],
+                    "INSERT INTO conversations (title, created_at, updated_at, project_id)
+                     VALUES (?1, ?2, ?3, ?4)",
+                    params![title, now, now, scoped_project],
                 )?;
                 conn.last_insert_rowid()
             }
@@ -353,17 +380,37 @@ impl Subscription {
             false => message.clone(),
         };
 
+        // Project scope: instructions frame every turn; knowledge chunks
+        // ground it (below). Plain chats keep both empty.
+        let (project_name, project_instructions) = match conn
+            .query_row(
+                "SELECT p.name, p.instructions FROM projects p
+                 JOIN conversations c ON c.project_id = p.id WHERE c.id = ?1",
+                [conversation_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?
+        {
+            Some((name, instructions)) if !instructions.trim().is_empty() => {
+                (name, Some(instructions))
+            }
+            Some((name, _)) => (name, None),
+            None => (String::new(), None),
+        };
+
         // Ground the turn: embed the prompt once and pull top-4 memories
-        // (global) + top-4 chunks from this conversation's attachments
-        // (similarity ≥ 0.5) as system context. A file-only send has nothing
-        // meaningful to embed, so it takes the conversation's opening chunks
-        // and skips memories. Embedding failures degrade to an ungrounded
-        // turn instead of failing chat (e.g. the model is still downloading).
+        // (global) + top-4 chunks from this conversation's attachments +
+        // top-4 chunks from the project's knowledge folder (similarity ≥ 0.5)
+        // as system context. A file-only send has nothing meaningful to
+        // embed, so it takes the conversation's opening chunks and skips
+        // memories. Embedding failures degrade to an ungrounded turn instead
+        // of failing chat (e.g. the model is still downloading).
         let embedder = ctx.data::<Arc<dyn Embedder>>()?.clone();
         let grounding = if message.trim().is_empty() && has_files {
             (
                 Vec::new(),
                 retrieval::conversation_chunks_head(&db, conversation_id).unwrap_or_default(),
+                Vec::new(),
             )
         } else {
             match embedder.embed(&prompt_for_provider).await {
@@ -375,11 +422,12 @@ impl Subscription {
                     };
                     let memories = retrieval::related_memories(&input).unwrap_or_default();
                     let chunks = retrieval::related_file_chunks(&input).unwrap_or_default();
-                    (memories, chunks)
+                    let project = retrieval::related_project_chunks(&input).unwrap_or_default();
+                    (memories, chunks, project)
                 }
                 Err(err) => {
                     eprintln!("[privait] retrieval skipped, embedding failed: {err}");
-                    (Vec::new(), Vec::new())
+                    (Vec::new(), Vec::new(), Vec::new())
                 }
             }
         };
@@ -396,7 +444,18 @@ impl Subscription {
             })
             .collect();
 
-        let (related_memories, related_chunks) = grounding;
+        let (related_memories, related_chunks, related_project) = grounding;
+
+        // The project's instructions frame every chat in the project.
+        if let Some(instructions) = project_instructions {
+            request_messages.push(ChatMessage {
+                role: ChatRole::System,
+                content: format!(
+                    "The user is working in the project \"{}\". Follow these project instructions:\n{}",
+                    project_name, instructions
+                ),
+            });
+        }
         if !related_memories.is_empty() {
             request_messages.push(ChatMessage {
                 role: ChatRole::System,
@@ -412,6 +471,15 @@ impl Subscription {
                 content: format!(
                     "Here are some related file chunks: {}",
                     related_chunks.join("\n")
+                ),
+            });
+        }
+        if !related_project.is_empty() {
+            request_messages.push(ChatMessage {
+                role: ChatRole::System,
+                content: format!(
+                    "Here are some related chunks from this project's knowledge: {}",
+                    related_project.join("\n")
                 ),
             });
         }

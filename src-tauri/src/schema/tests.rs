@@ -533,6 +533,117 @@ pub(crate) mod chat_tests {
     }
 
     #[tokio::test]
+    async fn project_chat_applies_instructions_and_grounds_only_its_own_knowledge() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = crate::db::init(dir.path()).unwrap();
+
+        let embedder = crate::embeddings::FakeEmbedder::by_keyword(&["apple", "banana"]);
+        let embedder: Arc<dyn Embedder> = Arc::new(embedder);
+
+        {
+            let conn = db.get().unwrap();
+            let store = |slot: usize| {
+                let mut vector = vec![0.0f32; db::EMBEDDING_DIM];
+                vector[slot] = 1.0;
+                vector
+            };
+
+            // Two projects; the chat belongs to project 1.
+            conn.execute(
+                "INSERT INTO projects (id, name, instructions, created_at, updated_at)
+                 VALUES (1, 'Thesis', 'Always answer in bullet points.', '0', '0')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO projects (id, name, instructions, created_at, updated_at)
+                 VALUES (2, 'Other', '', '0', '0')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO conversations (id, title, created_at, updated_at, project_id)
+                 VALUES (7, 'project chat', '0', '0', 1)",
+                [],
+            )
+            .unwrap();
+
+            // Knowledge folders: project 1 owns the apple chunk, project 2
+            // the (equally-similar) secret. Only project 1 may ground chat 7.
+            conn.execute(
+                "INSERT INTO files (id, original_name, file_name, mime_type, size, kind,
+                                    status, processed_at, created_at, project_id)
+                 VALUES (1, 'notes.txt', 'knowledge-1.txt', 'text/plain', 1, 'TEXT',
+                         'PROCESSED', '0', '0', 1)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO files (id, original_name, file_name, mime_type, size, kind,
+                                    status, processed_at, created_at, project_id)
+                 VALUES (2, 'secret.txt', 'knowledge-2.txt', 'text/plain', 1, 'TEXT',
+                         'PROCESSED', '0', '0', 2)",
+                [],
+            )
+            .unwrap();
+            for (content, file_id, slot) in [
+                ("apple knowledge", 1, 0usize),
+                ("other project secret", 2, 0usize),
+                ("banana knowledge", 1, 1usize),
+            ] {
+                conn.execute(
+                    "INSERT INTO file_chunks (embedding, content, file_id) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![db::embedding_to_blob(&store(slot)), content, file_id],
+                )
+                .unwrap();
+            }
+        }
+
+        let (base_url, captured) = spawn_capturing_mock_provider(vec!["grounded"]).await;
+        {
+            let conn = db.get().unwrap();
+            seed_provider_settings(&conn, &base_url).await;
+        }
+
+        let schema = upload_context(db, crate::storage::Storage::memory().unwrap(), embedder);
+        let mut stream =
+            schema.execute_stream(subscription_request(Some(7), "tell me about apples"));
+
+        let mut saw_done = false;
+        while let Some(response) = stream.next().await {
+            let payload = payload_item(response);
+            if payload["conversation"]["data"]["done"].as_bool() == Some(true) {
+                saw_done = true;
+            }
+        }
+        assert!(saw_done);
+
+        let request = captured.lock().unwrap().clone().unwrap();
+        let messages = request["messages"].as_array().unwrap();
+        let contents: Vec<&str> = messages
+            .iter()
+            .map(|m| m["content"].as_str().unwrap_or_default())
+            .collect();
+
+        // The instructions frame the turn, the project's knowledge grounds
+        // it, and the other project's equally-similar chunk stays out.
+        assert_eq!(
+            contents,
+            vec![
+                "The user is working in the project \"Thesis\". Follow these project instructions:\nAlways answer in bullet points.",
+                "Here are some related chunks from this project's knowledge: apple knowledge",
+                "tell me about apples",
+            ]
+        );
+        for content in contents {
+            assert!(
+                !content.contains("other project secret"),
+                "another project's knowledge leaked: {content:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn subscription_skips_grounding_when_nothing_matches() {
         let dir = tempfile::TempDir::new().unwrap();
         let db = crate::db::init(dir.path()).unwrap();
@@ -1534,6 +1645,224 @@ pub(crate) mod mutation_tests {
         assert_eq!(files, 1, "other chat's file untouched");
         assert_eq!(chunks, 1);
         assert!(storage.read(&survivor.file_name).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn project_crud_round_trip() {
+        let db = test_db();
+        let schema = schema_with(db.clone());
+
+        // Blank names are refused.
+        let response = schema
+            .execute("mutation { createProject(name: \"   \") { __typename } }")
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&response.data).unwrap()["createProject"]["__typename"],
+            json!("Error")
+        );
+
+        // Create.
+        let response = schema
+            .execute("mutation { createProject(name: \"Thesis\", instructions: \"Be terse.\") { __typename ... on MutationCreateProjectSuccess { data { id name instructions } } ... on Error { message } } }")
+            .await
+            .into_result()
+            .unwrap();
+        let create = serde_json::to_value(&response.data).unwrap()["createProject"].clone();
+        assert_eq!(create["__typename"], json!("MutationCreateProjectSuccess"), "{create:?}");
+        assert_eq!(create["data"]["name"], json!("Thesis"));
+        assert_eq!(create["data"]["instructions"], json!("Be terse."));
+        let project_id: i64 = create["data"]["id"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap();
+
+        // Read.
+        let response = schema
+            .execute("query { projects { id name } }")
+            .await
+            .into_result()
+            .unwrap();
+        let projects = serde_json::to_value(&response.data).unwrap()["projects"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0]["name"], json!("Thesis"));
+
+        // Update: rename + instructions.
+        let response = schema
+            .execute(format!("mutation {{ renameProject(projectId: {project_id}, name: \"Dissertation\") {{ __typename ... on Error {{ message }} }} }}"))
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&response.data).unwrap()["renameProject"]["__typename"],
+            json!("MutationRenameProjectSuccess")
+        );
+        let response = schema
+            .execute(format!("mutation {{ updateProjectInstructions(projectId: {project_id}, instructions: \"Be terse and kind.\") {{ __typename }} }}"))
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&response.data).unwrap()["updateProjectInstructions"]["__typename"],
+            json!("MutationUpdateProjectInstructionsSuccess")
+        );
+
+        let response = schema
+            .execute(format!("query {{ project(projectId: {project_id}) {{ name instructions }} }}"))
+            .await
+            .into_result()
+            .unwrap();
+        let project = serde_json::to_value(&response.data).unwrap()["project"].clone();
+        assert_eq!(project["name"], json!("Dissertation"));
+        assert_eq!(project["instructions"], json!("Be terse and kind."));
+
+        // Delete: chats survive unassigned; knowledge files die with it.
+        {
+            let conn = db.get().unwrap();
+            conn.execute(
+                "INSERT INTO conversations (id, title, created_at, updated_at, project_id)
+                 VALUES (11, 'chat', '0', '0', ?1)",
+                [project_id],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO files (id, original_name, file_name, mime_type, size, kind,
+                                    status, processed_at, created_at, project_id)
+                 VALUES (5, 'notes.txt', 'notes-5.txt', 'text/plain', 1, 'TEXT',
+                         'PROCESSED', '0', '0', ?1)",
+                [project_id],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO file_chunks (embedding, content, file_id) VALUES (?1, 'chunk', 5)",
+                [db::embedding_to_blob(&vec![0.0f32; db::EMBEDDING_DIM])],
+            )
+            .unwrap();
+        }
+
+        let response = schema
+            .execute(format!("mutation {{ deleteProject(projectId: {project_id}) {{ __typename ... on Error {{ message }} }} }}"))
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&response.data).unwrap()["deleteProject"]["__typename"],
+            json!("MutationDeleteProjectSuccess")
+        );
+
+        let conn = db.get().unwrap();
+        let (projects, files, chunks, project_of_chat): (i64, i64, i64, Option<i64>) = conn
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM projects),
+                        (SELECT COUNT(*) FROM files WHERE id = 5),
+                        (SELECT COUNT(*) FROM file_chunks WHERE file_id = 5),
+                        (SELECT project_id FROM conversations WHERE id = 11)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(projects, 0);
+        assert_eq!(files, 0, "knowledge files die with the project");
+        assert_eq!(chunks, 0, "knowledge chunks die with the project");
+        assert_eq!(project_of_chat, None, "the chat survives, unassigned");
+
+        // Missing project is a clean error on every mutation path.
+        let response = schema
+            .execute("mutation { deleteProject(projectId: 99) { __typename ... on Error { message } } }")
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&response.data).unwrap()["deleteProject"]["__typename"],
+            json!("Error")
+        );
+        assert_eq!(
+            serde_json::to_value(&response.data).unwrap()["deleteProject"]["message"],
+            json!("Project not found")
+        );
+    }
+
+    #[tokio::test]
+    async fn add_project_knowledge_claims_only_unattached_uploads() {
+        let db = test_db();
+        let schema = schema_with(db.clone());
+
+        {
+            let conn = db.get().unwrap();
+            conn.execute(
+                "INSERT INTO projects (id, name, instructions, created_at, updated_at)
+                 VALUES (1, 'Thesis', '', '0', '0')",
+                [],
+            )
+            .unwrap();
+            // Unattached upload (fresh from uploadFile, not yet claimed).
+            conn.execute(
+                "INSERT INTO files (id, original_name, file_name, mime_type, size, kind,
+                                    status, processed_at, created_at)
+                 VALUES (10, 'knowledge.txt', 'knowledge-10.txt', 'text/plain', 1, 'TEXT',
+                         'PROCESSED', '0', '0')",
+                [],
+            )
+            .unwrap();
+            // A chat attachment: must not be re-homed into the project.
+            conn.execute(
+                "INSERT INTO conversations (id, title, created_at, updated_at) VALUES (7, 'c', '0', '0')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO messages (id, conversation_id, role, content, created_at)
+                 VALUES (1, 7, 'USER', 'hi', '0')",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO files (id, original_name, file_name, mime_type, size, kind,
+                                    status, processed_at, created_at, message_id)
+                 VALUES (11, 'chat.txt', 'chat-11.txt', 'text/plain', 1, 'TEXT',
+                         'PROCESSED', '0', '0', 1)",
+                [],
+            )
+            .unwrap();
+        }
+
+        let response = schema
+            .execute("mutation { addProjectKnowledge(projectId: 1, fileIds: [10, 11]) { __typename ... on Error { message } } }")
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&response.data).unwrap()["addProjectKnowledge"]["__typename"],
+            json!("MutationAddProjectKnowledgeSuccess")
+        );
+
+        let conn = db.get().unwrap();
+        let (knowledge_project, chat_project): (Option<i64>, Option<i64>) = conn
+            .query_row(
+                "SELECT (SELECT project_id FROM files WHERE id = 10),
+                        (SELECT project_id FROM files WHERE id = 11)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(knowledge_project, Some(1), "unattached upload claimed");
+        assert_eq!(chat_project, None, "chat attachment stays put");
+
+        // Idempotent: a second claim pass changes nothing.
+        let response = schema
+            .execute("mutation { addProjectKnowledge(projectId: 1, fileIds: [10, 11]) { __typename } }")
+            .await
+            .into_result()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&response.data).unwrap()["addProjectKnowledge"]["__typename"],
+            json!("MutationAddProjectKnowledgeSuccess")
+        );
     }
 
 }

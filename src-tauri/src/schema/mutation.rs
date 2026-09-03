@@ -14,6 +14,7 @@ use crate::runs::RunRegistry;
 use crate::storage::Storage;
 
 use super::files::GqlFileUpload;
+use super::projects::{get_project, GqlProject};
 use super::settings::{GqlSettings, SettingsInput};
 use super::GqlError;
 
@@ -91,6 +92,69 @@ pub struct MutationDeleteFileUploadSuccess {
 pub enum MutationDeleteFileUploadResult {
     Error(GqlError),
     MutationDeleteFileUploadSuccess(MutationDeleteFileUploadSuccess),
+}
+
+// Project CRUD surface (0002): every mutation follows the same success
+// shape — `{ data: true }` — except createProject, which returns the row.
+
+#[derive(Debug, SimpleObject)]
+#[graphql(name = "MutationCreateProjectSuccess")]
+pub struct MutationCreateProjectSuccess {
+    pub data: GqlProject,
+}
+
+#[derive(Union)]
+pub enum MutationCreateProjectResult {
+    Error(GqlError),
+    MutationCreateProjectSuccess(MutationCreateProjectSuccess),
+}
+
+#[derive(Debug, SimpleObject)]
+#[graphql(name = "MutationRenameProjectSuccess")]
+pub struct MutationRenameProjectSuccess {
+    pub data: bool,
+}
+
+#[derive(Union)]
+pub enum MutationRenameProjectResult {
+    Error(GqlError),
+    MutationRenameProjectSuccess(MutationRenameProjectSuccess),
+}
+
+#[derive(Debug, SimpleObject)]
+#[graphql(name = "MutationUpdateProjectInstructionsSuccess")]
+pub struct MutationUpdateProjectInstructionsSuccess {
+    pub data: bool,
+}
+
+#[derive(Union)]
+pub enum MutationUpdateProjectInstructionsResult {
+    Error(GqlError),
+    MutationUpdateProjectInstructionsSuccess(MutationUpdateProjectInstructionsSuccess),
+}
+
+#[derive(Debug, SimpleObject)]
+#[graphql(name = "MutationDeleteProjectSuccess")]
+pub struct MutationDeleteProjectSuccess {
+    pub data: bool,
+}
+
+#[derive(Union)]
+pub enum MutationDeleteProjectResult {
+    Error(GqlError),
+    MutationDeleteProjectSuccess(MutationDeleteProjectSuccess),
+}
+
+#[derive(Debug, SimpleObject)]
+#[graphql(name = "MutationAddProjectKnowledgeSuccess")]
+pub struct MutationAddProjectKnowledgeSuccess {
+    pub data: bool,
+}
+
+#[derive(Union)]
+pub enum MutationAddProjectKnowledgeResult {
+    Error(GqlError),
+    MutationAddProjectKnowledgeSuccess(MutationAddProjectKnowledgeSuccess),
 }
 
 /// `input: FileUploadInput!` — kept for the old schema's shape even though it
@@ -403,5 +467,223 @@ impl Mutation {
             Ok(runs) => runs.cancel(conversation_id),
             Err(_) => false,
         }
+    }
+
+    /// Creates a project: name + optional instructions. Local-only container
+    /// for chats and knowledge.
+    async fn create_project(
+        &self,
+        ctx: &Context<'_>,
+        name: String,
+        instructions: Option<String>,
+    ) -> MutationCreateProjectResult {
+        let name = name.trim();
+        if name.is_empty() {
+            return MutationCreateProjectResult::Error(GqlError::new(
+                "Project name must not be empty",
+            ));
+        }
+
+        let db = match ctx.data::<Db>() {
+            Ok(db) => db,
+            Err(err) => return MutationCreateProjectResult::Error(GqlError::new(err.message)),
+        };
+        let conn = match db.get() {
+            Ok(conn) => conn,
+            Err(err) => return MutationCreateProjectResult::Error(GqlError::new(err.to_string())),
+        };
+
+        let now = chrono::Utc::now().to_rfc3339();
+        match conn.execute(
+            "INSERT INTO projects (name, instructions, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
+            rusqlite::params![name, instructions.unwrap_or_default(), now],
+        ) {
+            Ok(_) => {
+                let id = conn.last_insert_rowid();
+                match get_project(&conn, id) {
+                    Ok(Some(project)) => {
+                        MutationCreateProjectResult::MutationCreateProjectSuccess(
+                            MutationCreateProjectSuccess { data: project },
+                        )
+                    }
+                    Ok(None) => MutationCreateProjectResult::Error(GqlError::new(
+                        "project row vanished after insert",
+                    )),
+                    Err(err) => {
+                        MutationCreateProjectResult::Error(GqlError::new(err.to_string()))
+                    }
+                }
+            }
+            Err(err) => MutationCreateProjectResult::Error(GqlError::new(err.to_string())),
+        }
+    }
+
+    async fn rename_project(
+        &self,
+        ctx: &Context<'_>,
+        project_id: i64,
+        name: String,
+    ) -> MutationRenameProjectResult {
+        let name = name.trim();
+        if name.is_empty() {
+            return MutationRenameProjectResult::Error(GqlError::new(
+                "Project name must not be empty",
+            ));
+        }
+
+        let db = match ctx.data::<Db>() {
+            Ok(db) => db,
+            Err(err) => return MutationRenameProjectResult::Error(GqlError::new(err.message)),
+        };
+        let conn = match db.get() {
+            Ok(conn) => conn,
+            Err(err) => return MutationRenameProjectResult::Error(GqlError::new(err.to_string())),
+        };
+
+        if let Some(err) = project_error(&conn, project_id) {
+            return MutationRenameProjectResult::Error(err);
+        }
+
+        match conn.execute(
+            "UPDATE projects SET name = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![name, chrono::Utc::now().to_rfc3339(), project_id],
+        ) {
+            Ok(_) => MutationRenameProjectResult::MutationRenameProjectSuccess(
+                MutationRenameProjectSuccess { data: true },
+            ),
+            Err(err) => MutationRenameProjectResult::Error(GqlError::new(err.to_string())),
+        }
+    }
+
+    /// Sets the project's standing instructions, applied to every chat in
+    /// the project.
+    async fn update_project_instructions(
+        &self,
+        ctx: &Context<'_>,
+        project_id: i64,
+        instructions: String,
+    ) -> MutationUpdateProjectInstructionsResult {
+        let db = match ctx.data::<Db>() {
+            Ok(db) => db,
+            Err(err) => {
+                return MutationUpdateProjectInstructionsResult::Error(GqlError::new(err.message))
+            }
+        };
+        let conn = match db.get() {
+            Ok(conn) => conn,
+            Err(err) => {
+                return MutationUpdateProjectInstructionsResult::Error(GqlError::new(err.to_string()))
+            }
+        };
+
+        if let Some(err) = project_error(&conn, project_id) {
+            return MutationUpdateProjectInstructionsResult::Error(err);
+        }
+
+        match conn.execute(
+            "UPDATE projects SET instructions = ?1, updated_at = ?2 WHERE id = ?3",
+            rusqlite::params![instructions, chrono::Utc::now().to_rfc3339(), project_id],
+        ) {
+            Ok(_) => MutationUpdateProjectInstructionsResult::MutationUpdateProjectInstructionsSuccess(
+                MutationUpdateProjectInstructionsSuccess { data: true },
+            ),
+            Err(err) => MutationUpdateProjectInstructionsResult::Error(GqlError::new(err.to_string())),
+        }
+    }
+
+    /// Deletes a project: its chats survive as plain chats (project_id goes
+    /// NULL) and its knowledge files are removed with their chunks and bytes.
+    async fn delete_project(
+        &self,
+        ctx: &Context<'_>,
+        project_id: i64,
+    ) -> MutationDeleteProjectResult {
+        let db = match ctx.data::<Db>() {
+            Ok(db) => db,
+            Err(err) => return MutationDeleteProjectResult::Error(GqlError::new(err.message)),
+        };
+        let conn = match db.get() {
+            Ok(conn) => conn,
+            Err(err) => return MutationDeleteProjectResult::Error(GqlError::new(err.to_string())),
+        };
+
+        if let Some(err) = project_error(&conn, project_id) {
+            return MutationDeleteProjectResult::Error(err);
+        }
+
+        match files::drop_project_files_db(&conn, project_id) {
+            Ok(storage_keys) => {
+                if let Some(storage) = match ctx.data::<Option<Arc<Storage>>>() {
+                    Ok(Some(storage)) => Some(storage.clone()),
+                    _ => None,
+                } {
+                    for key in storage_keys {
+                        if let Err(err) = storage.delete(&key).await {
+                            eprintln!("[privait] storage delete failed for {key}: {err}");
+                        }
+                    }
+                }
+            }
+            Err(err) => return MutationDeleteProjectResult::Error(GqlError::new(err.to_string())),
+        }
+
+        match conn.execute("DELETE FROM projects WHERE id = ?1", [project_id]) {
+            Ok(_) => MutationDeleteProjectResult::MutationDeleteProjectSuccess(
+                MutationDeleteProjectSuccess { data: true },
+            ),
+            Err(err) => MutationDeleteProjectResult::Error(GqlError::new(err.to_string())),
+        }
+    }
+
+    /// Claims uploaded files into the project's knowledge folder (the same
+    /// inline extract→chunk→embed upload path as chat attachments). Only
+    /// unattached uploads are claimed.
+    async fn add_project_knowledge(
+        &self,
+        ctx: &Context<'_>,
+        project_id: i64,
+        file_ids: Vec<i64>,
+    ) -> MutationAddProjectKnowledgeResult {
+        let db = match ctx.data::<Db>() {
+            Ok(db) => db,
+            Err(err) => {
+                return MutationAddProjectKnowledgeResult::Error(GqlError::new(err.message))
+            }
+        };
+        let conn = match db.get() {
+            Ok(conn) => conn,
+            Err(err) => {
+                return MutationAddProjectKnowledgeResult::Error(GqlError::new(err.to_string()))
+            }
+        };
+
+        if let Some(err) = project_error(&conn, project_id) {
+            return MutationAddProjectKnowledgeResult::Error(err);
+        }
+
+        match files::claim_to_project(&conn, &file_ids, project_id) {
+            Ok(_) => MutationAddProjectKnowledgeResult::MutationAddProjectKnowledgeSuccess(
+                MutationAddProjectKnowledgeSuccess { data: true },
+            ),
+            Err(err) => MutationAddProjectKnowledgeResult::Error(GqlError::new(err.to_string())),
+        }
+    }
+}
+
+/// Shapes a missing-project failure the same way `conversation_error` does.
+fn project_error(conn: &Connection, project_id: i64) -> Option<GqlError> {
+    let exists: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM projects WHERE id = ?1",
+            [project_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .ok()
+        .flatten();
+    if exists.is_none() {
+        Some(GqlError::new("Project not found"))
+    } else {
+        None
     }
 }

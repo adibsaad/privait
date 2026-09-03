@@ -8,6 +8,7 @@ use crate::files;
 
 use super::chat::GqlConversation;
 use super::files::GqlFileUpload;
+use super::projects::{self, get_project, GqlProject};
 use super::settings::GqlSettings;
 use super::user::LocalUser;
 
@@ -36,14 +37,16 @@ impl Query {
         let db = ctx.data::<Db>()?;
         let conn = db.get()?;
 
-        let mut stmt =
-            conn.prepare("SELECT id, title, archived FROM conversations ORDER BY id ASC")?;
+        let mut stmt = conn.prepare(
+            "SELECT id, title, archived, project_id FROM conversations ORDER BY id ASC",
+        )?;
         let rows = stmt
             .query_map([], |row| {
                 Ok(GqlConversation {
                     id: row.get(0)?,
                     title: row.get(1)?,
                     archived: row.get::<_, i64>(2)? != 0,
+                    project_id: row.get(3)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -61,17 +64,35 @@ impl Query {
 
         Ok(conn
             .query_row(
-                "SELECT id, title, archived FROM conversations WHERE id = ?1",
+                "SELECT id, title, archived, project_id FROM conversations WHERE id = ?1",
                 [conversation_id],
                 |row| {
                     Ok(GqlConversation {
                         id: row.get(0)?,
                         title: row.get(1)?,
                         archived: row.get::<_, i64>(2)? != 0,
+                        project_id: row.get(3)?,
                     })
                 },
             )
             .optional()?)
+    }
+
+    /// All projects, oldest first — the sidebar's project groups.
+    async fn projects(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<GqlProject>> {
+        let db = ctx.data::<Db>()?;
+        let conn = db.get()?;
+        Ok(projects::list_projects(&conn)?)
+    }
+
+    async fn project(
+        &self,
+        ctx: &Context<'_>,
+        project_id: i64,
+    ) -> async_graphql::Result<Option<GqlProject>> {
+        let db = ctx.data::<Db>()?;
+        let conn = db.get()?;
+        Ok(get_project(&conn, project_id)?)
     }
 
     async fn settings(&self, ctx: &Context<'_>) -> async_graphql::Result<GqlSettings> {

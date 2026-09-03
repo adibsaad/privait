@@ -107,6 +107,20 @@ CREATE VIRTUAL TABLE memories USING vec0(
     // grounding scopes through messages; chips re-render from this link)
     "ALTER TABLE files ADD COLUMN message_id INTEGER NULL REFERENCES messages(id) ON DELETE CASCADE;
      CREATE INDEX idx_files_message ON files(message_id);",
+    // v4 — projects: the workspace container. Chats keep working without one
+    // (SET NULL on project delete); knowledge files are project-scoped
+    // attachments (CASCADE on project delete).
+    "CREATE TABLE projects (
+        id            INTEGER PRIMARY KEY,
+        name          TEXT NOT NULL,
+        instructions  TEXT NOT NULL DEFAULT '',
+        created_at    TEXT NOT NULL,
+        updated_at    TEXT NOT NULL
+     );
+     ALTER TABLE conversations ADD COLUMN project_id INTEGER NULL REFERENCES projects(id) ON DELETE SET NULL;
+     CREATE INDEX idx_conversations_project ON conversations(project_id);
+     ALTER TABLE files ADD COLUMN project_id INTEGER NULL REFERENCES projects(id) ON DELETE CASCADE;
+     CREATE INDEX idx_files_project ON files(project_id);",
 ];
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {

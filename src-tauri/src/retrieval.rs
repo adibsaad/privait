@@ -76,6 +76,56 @@ pub fn related_file_chunks(input: &RetrievalInput<'_>) -> Result<Vec<String>, St
         return Ok(Vec::new());
     }
 
+    knn_chunks_filtered(&conn, input.query_embedding, &conversation_file_ids)
+}
+
+/// The project this conversation belongs to, if any.
+fn conversation_project(conn: &rusqlite::Connection, conversation_id: i64) -> Option<i64> {
+    conn.query_row(
+        "SELECT project_id FROM conversations WHERE id = ?1 AND project_id IS NOT NULL",
+        [conversation_id],
+        |row| row.get::<_, i64>(0),
+    )
+    .ok()
+}
+
+/// Top-4 file-chunk contents from the conversation's project knowledge
+/// folder, most similar first. Plain chats (no project) get nothing here.
+/// Same app-side scoping as `related_file_chunks` — the KNN runs over the
+/// whole chunk table and filters to the project's knowledge files.
+pub fn related_project_chunks(input: &RetrievalInput<'_>) -> Result<Vec<String>, String> {
+    if input.query_embedding.len() != EMBEDDING_DIM {
+        return Ok(Vec::new());
+    }
+    let conn = input.db.get().map_err(|err| err.to_string())?;
+    let Some(project_id) = conversation_project(&conn, input.conversation_id) else {
+        return Ok(Vec::new());
+    };
+
+    let knowledge_file_ids: Vec<i64> = {
+        let mut stmt = conn
+            .prepare("SELECT id FROM files WHERE project_id = ?1")
+            .map_err(|err| err.to_string())?;
+        let rows = stmt
+            .query_map([project_id], |row| row.get(0))
+            .map_err(|err| err.to_string())?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|err| err.to_string())?
+    };
+    if knowledge_file_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    knn_chunks_filtered(&conn, input.query_embedding, &knowledge_file_ids)
+}
+
+/// KNN over every chunk (vec0 needs its k unscoped), filtered app-side to the
+/// allowed file ids. See `related_file_chunks` for why the JOIN stays out.
+fn knn_chunks_filtered(
+    conn: &rusqlite::Connection,
+    query_embedding: &[f32],
+    file_ids: &[i64],
+) -> Result<Vec<String>, String> {
     let total: i64 = conn
         .query_row("SELECT COUNT(*) FROM file_chunks", [], |row| row.get(0))
         .map_err(|err| err.to_string())?;
@@ -83,9 +133,7 @@ pub fn related_file_chunks(input: &RetrievalInput<'_>) -> Result<Vec<String>, St
         return Ok(Vec::new());
     }
 
-    // KNN over the whole table (vec0 requires its k as a literal or bare
-    // `k = ?`); filter to the conversation afterwards.
-    let query_blob = db::embedding_to_blob(input.query_embedding);
+    let query_blob = db::embedding_to_blob(query_embedding);
     let mut stmt = conn
         .prepare(&format!(
             "SELECT rowid, file_id FROM file_chunks
@@ -101,9 +149,9 @@ pub fn related_file_chunks(input: &RetrievalInput<'_>) -> Result<Vec<String>, St
         .map_err(|err| err.to_string())?;
 
     knn.into_iter()
-        .filter(|(_, file_id)| conversation_file_ids.contains(file_id))
+        .filter(|(_, file_id)| file_ids.contains(file_id))
         .take(RETRIEVAL_LIMIT)
-        .map(|(rowid, _)| chunk_content(&conn, rowid))
+        .map(|(rowid, _)| chunk_content(conn, rowid))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| err.to_string())
 }

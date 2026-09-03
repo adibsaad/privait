@@ -111,6 +111,28 @@ const EXPECTED_DIFF = [
   // 0001 run registry: server-side half of the stop button (see the
   // per-conversation run registry row in docs/architecture.md).
   'Mutation: + stopRun: (conversationId: Int!): Boolean!',
+  // 0002 projects: the workspace container (see the projects row in
+  // docs/architecture.md).
+  'Conversation: + projectId: Int',
+  'Subscription: ~ conversation: (conversationId: Int, fileIds: [Int!], message: String!, projectId: Int): SubscriptionConversationResult! (was (conversationId: Int, message: String!): SubscriptionConversationResult)',
+  'Mutation: + addProjectKnowledge: (fileIds: [Int!]!, projectId: Int!): MutationAddProjectKnowledgeResult!',
+  'Mutation: + createProject: (instructions: String, name: String!): MutationCreateProjectResult!',
+  'Mutation: + deleteProject: (projectId: Int!): MutationDeleteProjectResult!',
+  'Mutation: + renameProject: (name: String!, projectId: Int!): MutationRenameProjectResult!',
+  'Mutation: + updateProjectInstructions: (instructions: String!, projectId: Int!): MutationUpdateProjectInstructionsResult!',
+  'Query: + project: (projectId: Int!): Project',
+  'Query: + projects: [Project!]!',
+  'type added: MutationAddProjectKnowledgeResult',
+  'type added: MutationAddProjectKnowledgeSuccess',
+  'type added: MutationCreateProjectResult',
+  'type added: MutationCreateProjectSuccess',
+  'type added: MutationDeleteProjectResult',
+  'type added: MutationDeleteProjectSuccess',
+  'type added: MutationRenameProjectResult',
+  'type added: MutationRenameProjectSuccess',
+  'type added: MutationUpdateProjectInstructionsResult',
+  'type added: MutationUpdateProjectInstructionsSuccess',
+  'type added: Project',
   'Mutation: - completeMagicLink: (token: String!): MutationCompleteMagicLinkResult!',
   'Mutation: - magicLink: (email: String!): MutationMagicLinkResult!',
   // Documented M2/M3 additions
@@ -118,7 +140,6 @@ const EXPECTED_DIFF = [
   'Message: + files: [FileUpload!]!',
   'Query: + health: String!',
   'Query: + settings: Settings!',
-  'Subscription: ~ conversation: (conversationId: Int, fileIds: [Int!], message: String!): SubscriptionConversationResult! (was (conversationId: Int, message: String!): SubscriptionConversationResult)',
   'type added: MutationArchiveConversationResult',
   'type added: MutationArchiveConversationSuccess',
   'type added: MutationRenameConversationResult',

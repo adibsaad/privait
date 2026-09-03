@@ -8,6 +8,8 @@ export type Thread = {
   id: string
   title: string
   status: 'regular'
+  /** Project this chat belongs to (null = plain chat). */
+  projectId?: number | null
 }
 
 export type ArchivedThread = {

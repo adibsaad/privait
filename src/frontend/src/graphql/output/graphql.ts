@@ -1,4 +1,3 @@
-/* eslint-disable */
 import { TypedDocumentNode as DocumentNode } from '@graphql-typed-document-node/core'
 
 export type Maybe<T> = T | null
@@ -37,6 +36,7 @@ export type Conversation = {
   archived: Scalars['Boolean']['output']
   id: Scalars['ID']['output']
   messages: Array<Message>
+  projectId?: Maybe<Scalars['Int']['output']>
   title: Scalars['String']['output']
 }
 
@@ -105,11 +105,28 @@ export enum MessageRole {
 
 export type Mutation = {
   __typename?: 'Mutation'
+  /**
+   * Claims uploaded files into the project's knowledge folder (the same
+   * inline extract→chunk→embed upload path as chat attachments). Only
+   * unattached uploads are claimed.
+   */
+  addProjectKnowledge: MutationAddProjectKnowledgeResult
   archiveConversation: MutationArchiveConversationResult
+  /**
+   * Creates a project: name + optional instructions. Local-only container
+   * for chats and knowledge.
+   */
+  createProject: MutationCreateProjectResult
   deleteConversation: MutationDeleteConversationResult
   /** Removes the upload, its stored bytes, and its vector chunks. */
   deleteFileUpload: MutationDeleteFileUploadResult
+  /**
+   * Deletes a project: its chats survive as plain chats (project_id goes
+   * NULL) and its knowledge files are removed with their chunks and bytes.
+   */
+  deleteProject: MutationDeleteProjectResult
   renameConversation: MutationRenameConversationResult
+  renameProject: MutationRenameProjectResult
   saveSettings: MutationSaveSettingsResult
   /**
    * Server-side half of the stop button: cancels the conversation's
@@ -117,6 +134,11 @@ export type Mutation = {
    * far. `false` when no reply is in flight (late stop press).
    */
   stopRun: Scalars['Boolean']['output']
+  /**
+   * Sets the project's standing instructions, applied to every chat in
+   * the project.
+   */
+  updateProjectInstructions: MutationUpdateProjectInstructionsResult
   /**
    * Persists a validated upload (5MB cap, MIME allowlist) to storage and
    * the `files` table, then runs the extract → chunk → embed pipeline
@@ -128,9 +150,19 @@ export type Mutation = {
   uploadFile: MutationUploadFileResult
 }
 
+export type MutationAddProjectKnowledgeArgs = {
+  fileIds: Array<Scalars['Int']['input']>
+  projectId: Scalars['Int']['input']
+}
+
 export type MutationArchiveConversationArgs = {
   archived: Scalars['Boolean']['input']
   conversationId: Scalars['Int']['input']
+}
+
+export type MutationCreateProjectArgs = {
+  instructions?: InputMaybe<Scalars['String']['input']>
+  name: Scalars['String']['input']
 }
 
 export type MutationDeleteConversationArgs = {
@@ -141,9 +173,18 @@ export type MutationDeleteFileUploadArgs = {
   fileId: Scalars['Int']['input']
 }
 
+export type MutationDeleteProjectArgs = {
+  projectId: Scalars['Int']['input']
+}
+
 export type MutationRenameConversationArgs = {
   conversationId: Scalars['Int']['input']
   title: Scalars['String']['input']
+}
+
+export type MutationRenameProjectArgs = {
+  name: Scalars['String']['input']
+  projectId: Scalars['Int']['input']
 }
 
 export type MutationSaveSettingsArgs = {
@@ -154,8 +195,22 @@ export type MutationStopRunArgs = {
   conversationId: Scalars['Int']['input']
 }
 
+export type MutationUpdateProjectInstructionsArgs = {
+  instructions: Scalars['String']['input']
+  projectId: Scalars['Int']['input']
+}
+
 export type MutationUploadFileArgs = {
   input: FileUploadInput
+}
+
+export type MutationAddProjectKnowledgeResult =
+  | Error
+  | MutationAddProjectKnowledgeSuccess
+
+export type MutationAddProjectKnowledgeSuccess = {
+  __typename?: 'MutationAddProjectKnowledgeSuccess'
+  data: Scalars['Boolean']['output']
 }
 
 export type MutationArchiveConversationResult =
@@ -165,6 +220,13 @@ export type MutationArchiveConversationResult =
 export type MutationArchiveConversationSuccess = {
   __typename?: 'MutationArchiveConversationSuccess'
   data: Scalars['Boolean']['output']
+}
+
+export type MutationCreateProjectResult = Error | MutationCreateProjectSuccess
+
+export type MutationCreateProjectSuccess = {
+  __typename?: 'MutationCreateProjectSuccess'
+  data: Project
 }
 
 export type MutationDeleteConversationResult =
@@ -185,12 +247,26 @@ export type MutationDeleteFileUploadSuccess = {
   data: Scalars['Boolean']['output']
 }
 
+export type MutationDeleteProjectResult = Error | MutationDeleteProjectSuccess
+
+export type MutationDeleteProjectSuccess = {
+  __typename?: 'MutationDeleteProjectSuccess'
+  data: Scalars['Boolean']['output']
+}
+
 export type MutationRenameConversationResult =
   | Error
   | MutationRenameConversationSuccess
 
 export type MutationRenameConversationSuccess = {
   __typename?: 'MutationRenameConversationSuccess'
+  data: Scalars['Boolean']['output']
+}
+
+export type MutationRenameProjectResult = Error | MutationRenameProjectSuccess
+
+export type MutationRenameProjectSuccess = {
+  __typename?: 'MutationRenameProjectSuccess'
   data: Scalars['Boolean']['output']
 }
 
@@ -201,11 +277,34 @@ export type MutationSaveSettingsSuccess = {
   data: Settings
 }
 
+export type MutationUpdateProjectInstructionsResult =
+  | Error
+  | MutationUpdateProjectInstructionsSuccess
+
+export type MutationUpdateProjectInstructionsSuccess = {
+  __typename?: 'MutationUpdateProjectInstructionsSuccess'
+  data: Scalars['Boolean']['output']
+}
+
 export type MutationUploadFileResult = Error | MutationUploadFileSuccess
 
 export type MutationUploadFileSuccess = {
   __typename?: 'MutationUploadFileSuccess'
   data: FileUpload
+}
+
+export type Project = {
+  __typename?: 'Project'
+  /**
+   * This project's live chats, newest first (archive state lives on the
+   * conversation rows; archived chats stay out of the project stat here).
+   */
+  conversations: Array<Conversation>
+  createdAt: Scalars['String']['output']
+  id: Scalars['ID']['output']
+  instructions: Scalars['String']['output']
+  name: Scalars['String']['output']
+  updatedAt: Scalars['String']['output']
 }
 
 export type Query = {
@@ -218,11 +317,18 @@ export type Query = {
   files: Array<FileUpload>
   /** Liveness check for the in-process API server. */
   health: Scalars['String']['output']
+  project?: Maybe<Project>
+  /** All projects, oldest first — the sidebar's project groups. */
+  projects: Array<Project>
   settings: Settings
 }
 
 export type QueryConversationArgs = {
   conversationId: Scalars['Int']['input']
+}
+
+export type QueryProjectArgs = {
+  projectId: Scalars['Int']['input']
 }
 
 export type Settings = {
@@ -266,6 +372,7 @@ export type SubscriptionConversationArgs = {
   conversationId?: InputMaybe<Scalars['Int']['input']>
   fileIds?: InputMaybe<Array<Scalars['Int']['input']>>
   message: Scalars['String']['input']
+  projectId?: InputMaybe<Scalars['Int']['input']>
 }
 
 export type SubscriptionConversationResult =
@@ -290,6 +397,80 @@ export type User = {
 export type HealthQueryVariables = Exact<{ [key: string]: never }>
 
 export type HealthQuery = { __typename?: 'Query'; health: string }
+
+export type ProjectsQueryVariables = Exact<{ [key: string]: never }>
+
+export type ProjectsQuery = {
+  __typename?: 'Query'
+  projects: Array<{
+    __typename?: 'Project'
+    id: string
+    name: string
+    instructions: string
+  }>
+}
+
+export type DeleteProjectMutationVariables = Exact<{
+  projectId: Scalars['Int']['input']
+}>
+
+export type DeleteProjectMutation = {
+  __typename?: 'Mutation'
+  deleteProject:
+    | { __typename: 'Error'; message: string }
+    | { __typename: 'MutationDeleteProjectSuccess' }
+}
+
+export type CreateProjectMutationVariables = Exact<{
+  name: Scalars['String']['input']
+  instructions?: InputMaybe<Scalars['String']['input']>
+}>
+
+export type CreateProjectMutation = {
+  __typename?: 'Mutation'
+  createProject:
+    | { __typename: 'Error'; message: string }
+    | {
+        __typename: 'MutationCreateProjectSuccess'
+        data: { __typename?: 'Project'; id: string; name: string }
+      }
+}
+
+export type RenameProjectMutationVariables = Exact<{
+  projectId: Scalars['Int']['input']
+  name: Scalars['String']['input']
+}>
+
+export type RenameProjectMutation = {
+  __typename?: 'Mutation'
+  renameProject:
+    | { __typename: 'Error'; message: string }
+    | { __typename: 'MutationRenameProjectSuccess' }
+}
+
+export type UpdateProjectInstructionsMutationVariables = Exact<{
+  projectId: Scalars['Int']['input']
+  instructions: Scalars['String']['input']
+}>
+
+export type UpdateProjectInstructionsMutation = {
+  __typename?: 'Mutation'
+  updateProjectInstructions:
+    | { __typename: 'Error'; message: string }
+    | { __typename: 'MutationUpdateProjectInstructionsSuccess' }
+}
+
+export type AddProjectKnowledgeMutationVariables = Exact<{
+  projectId: Scalars['Int']['input']
+  fileIds: Array<Scalars['Int']['input']> | Scalars['Int']['input']
+}>
+
+export type AddProjectKnowledgeMutation = {
+  __typename?: 'Mutation'
+  addProjectKnowledge:
+    | { __typename: 'Error'; message: string }
+    | { __typename: 'MutationAddProjectKnowledgeSuccess' }
+}
 
 export type GetSettingsQueryVariables = Exact<{ [key: string]: never }>
 
@@ -338,6 +519,7 @@ export type ConversationSubSubscriptionVariables = Exact<{
   conversationId?: InputMaybe<Scalars['Int']['input']>
   message: Scalars['String']['input']
   fileIds?: InputMaybe<Array<Scalars['Int']['input']> | Scalars['Int']['input']>
+  projectId?: InputMaybe<Scalars['Int']['input']>
 }>
 
 export type ConversationSubSubscription = {
@@ -439,6 +621,7 @@ export type AllConversationsQuery = {
     id: string
     title: string
     archived: boolean
+    projectId?: number | null
     messages: Array<{
       __typename: 'Message'
       id: string
@@ -493,6 +676,488 @@ export const HealthDocument = {
     },
   ],
 } as unknown as DocumentNode<HealthQuery, HealthQueryVariables>
+export const ProjectsDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'query',
+      name: { kind: 'Name', value: 'Projects' },
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'projects' },
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                { kind: 'Field', name: { kind: 'Name', value: 'id' } },
+                { kind: 'Field', name: { kind: 'Name', value: 'name' } },
+                {
+                  kind: 'Field',
+                  name: { kind: 'Name', value: 'instructions' },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<ProjectsQuery, ProjectsQueryVariables>
+export const DeleteProjectDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'mutation',
+      name: { kind: 'Name', value: 'DeleteProject' },
+      variableDefinitions: [
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'projectId' },
+          },
+          type: {
+            kind: 'NonNullType',
+            type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
+          },
+        },
+      ],
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'deleteProject' },
+            arguments: [
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'projectId' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'projectId' },
+                },
+              },
+            ],
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: { kind: 'Name', value: 'Error' },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'message' },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<
+  DeleteProjectMutation,
+  DeleteProjectMutationVariables
+>
+export const CreateProjectDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'mutation',
+      name: { kind: 'Name', value: 'CreateProject' },
+      variableDefinitions: [
+        {
+          kind: 'VariableDefinition',
+          variable: { kind: 'Variable', name: { kind: 'Name', value: 'name' } },
+          type: {
+            kind: 'NonNullType',
+            type: {
+              kind: 'NamedType',
+              name: { kind: 'Name', value: 'String' },
+            },
+          },
+        },
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'instructions' },
+          },
+          type: { kind: 'NamedType', name: { kind: 'Name', value: 'String' } },
+        },
+      ],
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'createProject' },
+            arguments: [
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'name' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'name' },
+                },
+              },
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'instructions' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'instructions' },
+                },
+              },
+            ],
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: {
+                      kind: 'Name',
+                      value: 'MutationCreateProjectSuccess',
+                    },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'data' },
+                        selectionSet: {
+                          kind: 'SelectionSet',
+                          selections: [
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'id' },
+                            },
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'name' },
+                            },
+                          ],
+                        },
+                      },
+                    ],
+                  },
+                },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: { kind: 'Name', value: 'Error' },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'message' },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<
+  CreateProjectMutation,
+  CreateProjectMutationVariables
+>
+export const RenameProjectDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'mutation',
+      name: { kind: 'Name', value: 'RenameProject' },
+      variableDefinitions: [
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'projectId' },
+          },
+          type: {
+            kind: 'NonNullType',
+            type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
+          },
+        },
+        {
+          kind: 'VariableDefinition',
+          variable: { kind: 'Variable', name: { kind: 'Name', value: 'name' } },
+          type: {
+            kind: 'NonNullType',
+            type: {
+              kind: 'NamedType',
+              name: { kind: 'Name', value: 'String' },
+            },
+          },
+        },
+      ],
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'renameProject' },
+            arguments: [
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'projectId' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'projectId' },
+                },
+              },
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'name' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'name' },
+                },
+              },
+            ],
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: { kind: 'Name', value: 'Error' },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'message' },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<
+  RenameProjectMutation,
+  RenameProjectMutationVariables
+>
+export const UpdateProjectInstructionsDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'mutation',
+      name: { kind: 'Name', value: 'UpdateProjectInstructions' },
+      variableDefinitions: [
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'projectId' },
+          },
+          type: {
+            kind: 'NonNullType',
+            type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
+          },
+        },
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'instructions' },
+          },
+          type: {
+            kind: 'NonNullType',
+            type: {
+              kind: 'NamedType',
+              name: { kind: 'Name', value: 'String' },
+            },
+          },
+        },
+      ],
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'updateProjectInstructions' },
+            arguments: [
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'projectId' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'projectId' },
+                },
+              },
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'instructions' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'instructions' },
+                },
+              },
+            ],
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: { kind: 'Name', value: 'Error' },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'message' },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<
+  UpdateProjectInstructionsMutation,
+  UpdateProjectInstructionsMutationVariables
+>
+export const AddProjectKnowledgeDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'mutation',
+      name: { kind: 'Name', value: 'AddProjectKnowledge' },
+      variableDefinitions: [
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'projectId' },
+          },
+          type: {
+            kind: 'NonNullType',
+            type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
+          },
+        },
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'fileIds' },
+          },
+          type: {
+            kind: 'NonNullType',
+            type: {
+              kind: 'ListType',
+              type: {
+                kind: 'NonNullType',
+                type: {
+                  kind: 'NamedType',
+                  name: { kind: 'Name', value: 'Int' },
+                },
+              },
+            },
+          },
+        },
+      ],
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'addProjectKnowledge' },
+            arguments: [
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'projectId' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'projectId' },
+                },
+              },
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'fileIds' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'fileIds' },
+                },
+              },
+            ],
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: { kind: 'Name', value: 'Error' },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'message' },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<
+  AddProjectKnowledgeMutation,
+  AddProjectKnowledgeMutationVariables
+>
 export const GetSettingsDocument = {
   kind: 'Document',
   definitions: [
@@ -697,6 +1362,14 @@ export const ConversationSubDocument = {
             },
           },
         },
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'projectId' },
+          },
+          type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
+        },
       ],
       selectionSet: {
         kind: 'SelectionSet',
@@ -727,6 +1400,14 @@ export const ConversationSubDocument = {
                 value: {
                   kind: 'Variable',
                   name: { kind: 'Name', value: 'fileIds' },
+                },
+              },
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'projectId' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'projectId' },
                 },
               },
             ],
@@ -1270,6 +1951,7 @@ export const AllConversationsDocument = {
                 { kind: 'Field', name: { kind: 'Name', value: 'id' } },
                 { kind: 'Field', name: { kind: 'Name', value: 'title' } },
                 { kind: 'Field', name: { kind: 'Name', value: 'archived' } },
+                { kind: 'Field', name: { kind: 'Name', value: 'projectId' } },
                 {
                   kind: 'Field',
                   name: { kind: 'Name', value: 'messages' },

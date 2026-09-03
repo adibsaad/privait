@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, createContext, useContext } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { gql } from '@apollo/client'
@@ -48,11 +48,13 @@ gql(/* GraphQL */ `
     $conversationId: Int
     $message: String!
     $fileIds: [Int!]
+    $projectId: Int
   ) {
     conversation(
       conversationId: $conversationId
       message: $message
       fileIds: $fileIds
+      projectId: $projectId
     ) {
       __typename
 
@@ -138,6 +140,33 @@ gql(/* GraphQL */ `
 const ATTACHMENT_ACCEPT =
   '.pdf,.txt,.md,.csv,.html,application/pdf,text/plain,text/markdown,text/csv,text/html'
 
+/**
+ * Sidebar actions, exposed for the custom grouped thread list: the
+ * assistant-ui thread-list primitives don't support project groups, so the
+ * list calls these directly. Backed by the same logic as the runtime's
+ * ExternalStoreThreadListAdapter.
+ */
+export type ThreadActions = {
+  switchTo: (threadId: string) => void
+  switchToNew: () => void
+  newThreadInProject: (projectId: number) => void
+  rename: (threadId: string, title: string) => void
+  archive: (threadId: string) => void
+  remove: (threadId: string) => void
+}
+
+export const ThreadActionsContext = createContext<ThreadActions | null>(null)
+
+export function useThreadActions(): ThreadActions {
+  const actions = useContext(ThreadActionsContext)
+  if (!actions) {
+    throw new Error(
+      'useThreadActions must be used within ApolloChatRuntimeProvider',
+    )
+  }
+  return actions
+}
+
 type PendingUpload = { attachmentId: string; file: File }
 
 function useComposerAttachmentAdapter() {
@@ -208,7 +237,13 @@ export function ApolloChatRuntimeProvider({
     msg: string
     conversationId: number | null
     fileIds: number[] | null
-  }>({ msg: '', conversationId: null, fileIds: null })
+    projectId: number | null
+  }>({ msg: '', conversationId: null, fileIds: null, projectId: null })
+  // Chat opened inside a project but not yet created (first send creates it
+  // in the project via the subscription's projectId).
+  const [composerProjectId, composerProjectIdSet] = useState<number | null>(
+    null,
+  )
   const [skipSub, skipSubSet] = useState(true)
   // Which conversation is generating, server-tracked via the run registry.
   // `isRunning` is per-thread: a streaming chat must not freeze other
@@ -280,6 +315,7 @@ export function ApolloChatRuntimeProvider({
       // Drop any optimistic messages left in the "new thread" bucket.
       setThreads(prev => dropNewThreadBucket(prev))
       setCurrentThreadId(EMPTY_THREAD_ID)
+      composerProjectIdSet(null)
       navigate('/chat')
     },
 
@@ -309,7 +345,7 @@ export function ApolloChatRuntimeProvider({
 
       setThreadList(prev => prev.filter(t => t.id !== threadId))
       setArchivedThreadList(prev => [
-        { ...thread, status: 'archived' },
+        { id: thread.id, title: thread.title, status: 'archived' },
         ...prev,
       ])
       syncCache(threadId, { archived: true })
@@ -383,6 +419,7 @@ export function ApolloChatRuntimeProvider({
       conversationId: nextMessage.conversationId,
       message: nextMessage.msg,
       fileIds: nextMessage.fileIds,
+      projectId: nextMessage.projectId,
     },
     onData: newMessage => {
       if (newMessage.data.data?.conversation?.__typename === 'Error') {
@@ -540,18 +577,95 @@ export function ApolloChatRuntimeProvider({
     )
     // Brand-new chats also appear in the sidebar immediately, selected
     // with a fallback title, and get their real id on the first chunk.
+    // A chat opened inside a project stays in its group while optimistic.
     if (currentThreadId === EMPTY_THREAD_ID) {
-      setThreadList(prev => withOptimisticThread(prev))
+      setThreadList(prev => withOptimisticThread(prev, composerProjectId))
     }
 
     nextMessageSet({
       msg: text,
       conversationId: Number(currentThreadId),
       fileIds,
+      projectId: composerProjectId,
     })
     runningThreadIdSet(currentThreadId)
     gotFirstChunkRef.current = false
     skipSubSet(false)
+  }
+
+  const threadActions: ThreadActions = {
+    switchTo: threadId => {
+      setCurrentThreadId(threadId)
+      navigate('/chat')
+    },
+    switchToNew: () => {
+      setThreads(prev => dropNewThreadBucket(prev))
+      setCurrentThreadId(EMPTY_THREAD_ID)
+      composerProjectIdSet(null)
+      navigate('/chat')
+    },
+    newThreadInProject: projectId => {
+      setThreads(prev => dropNewThreadBucket(prev))
+      setCurrentThreadId(EMPTY_THREAD_ID)
+      composerProjectIdSet(projectId)
+      navigate('/chat')
+    },
+    rename: (threadId, newTitle) => {
+      setThreadList(prev =>
+        prev.map(t => (t.id === threadId ? { ...t, title: newTitle } : t)),
+      )
+      syncCache(threadId, { title: newTitle })
+      if (Number(threadId)) {
+        renameConversationMut({
+          variables: { conversationId: Number(threadId), title: newTitle },
+        })
+      }
+    },
+    archive: threadId => {
+      const thread = threadList.find(t => t.id === threadId)
+      if (!thread) {
+        return
+      }
+      setThreadList(prev => prev.filter(t => t.id !== threadId))
+      setArchivedThreadList(prev => [
+        { id: thread.id, title: thread.title, status: 'archived' },
+        ...prev,
+      ])
+      syncCache(threadId, { archived: true })
+      if (Number(threadId)) {
+        archiveConversationMut({
+          variables: { conversationId: Number(threadId), archived: true },
+        })
+      }
+      if (currentThreadId === threadId) {
+        setCurrentThreadId(EMPTY_THREAD_ID)
+        navigate('/chat')
+      }
+    },
+    remove: threadId => {
+      let nextThreadId: string | null = null
+      setThreadList(prev => {
+        const newList = prev.filter(t => t.id !== threadId)
+        if (newList.length) {
+          nextThreadId = newList[0].id
+        }
+        return newList
+      })
+      setThreads(prev => {
+        const next = new Map(prev)
+        next.delete(threadId)
+        return next
+      })
+      if (currentThreadId === threadId) {
+        setCurrentThreadId(nextThreadId ?? EMPTY_THREAD_ID)
+      }
+      syncCache(threadId, 'remove')
+      if (Number(threadId)) {
+        deleteConversationMut({
+          variables: { conversationId: Number(threadId) },
+        })
+      }
+    },
   }
 
   // Stop button: ask the backend to abort the run (it cancels the provider
@@ -587,8 +701,10 @@ export function ApolloChatRuntimeProvider({
   })
 
   return (
-    <AssistantRuntimeProvider runtime={runtime}>
-      {children}
-    </AssistantRuntimeProvider>
+    <ThreadActionsContext.Provider value={threadActions}>
+      <AssistantRuntimeProvider runtime={runtime}>
+        {children}
+      </AssistantRuntimeProvider>
+    </ThreadActionsContext.Provider>
   )
 }

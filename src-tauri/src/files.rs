@@ -261,15 +261,58 @@ pub fn files_for_message(conn: &Connection, message_id: i64) -> rusqlite::Result
     Ok(rows)
 }
 
-/// Removes uploads that were stored but never attached to a message (a send
-/// that failed between upload and subscribe). Runs at startup.
+/// Claims uploads into a project's knowledge folder. Only unattached uploads
+/// (no message, no project) are claimed, so a stale client can't re-home a
+/// chat attachment. Idempotent for already-claimed files.
+pub fn claim_to_project(
+    conn: &Connection,
+    file_ids: &[i64],
+    project_id: i64,
+) -> rusqlite::Result<usize> {
+    let mut claimed = 0;
+    for file_id in file_ids {
+        conn.execute(
+            "UPDATE files SET project_id = ?1
+             WHERE id = ?2 AND message_id IS NULL AND project_id IS NULL",
+            rusqlite::params![project_id, file_id],
+        )?;
+        claimed += conn.changes() as usize;
+
+    }
+    Ok(claimed)
+}
+
+/// Collects then deletes a project's knowledge files: vector chunks first,
+/// then the rows; the project cascade would also remove them, but doing it
+/// here lets the caller drop the storage bytes with the returned keys
+/// (without holding the !Sync connection across awaits).
+pub fn drop_project_files_db(conn: &Connection, project_id: i64) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, file_name FROM files WHERE project_id = ?1",
+    )?;
+    let files: Vec<(i64, String)> = stmt
+        .query_map([project_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+
+    let mut storage_keys = Vec::with_capacity(files.len());
+    for (file_id, file_name) in files {
+        conn.execute("DELETE FROM file_chunks WHERE file_id = ?1", [file_id])?;
+        conn.execute("DELETE FROM files WHERE id = ?1", [file_id])?;
+        storage_keys.push(file_name);
+    }
+    Ok(storage_keys)
+}
+
+/// Removes uploads that were stored but never attached to a message or a
+/// project's knowledge (a send that failed between upload and subscribe, an
+/// unclaimed knowledge upload after the chat died). Runs at startup.
 pub async fn gc_orphan_uploads(db: &Db, storage: &Storage) -> usize {
     let conn = match db.get() {
         Ok(conn) => conn,
         Err(_) => return 0,
     };
     let orphans: Vec<(i64, String)> = match conn
-        .prepare("SELECT id, file_name FROM files WHERE message_id IS NULL")
+        .prepare("SELECT id, file_name FROM files WHERE message_id IS NULL AND project_id IS NULL")
         .and_then(|mut stmt| {
             stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
                 .and_then(|rows| rows.collect())

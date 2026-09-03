@@ -2,6 +2,7 @@ type Conversation {
 	id: ID!
 	title: String!
 	archived: Boolean!
+	projectId: Int
 	messages: [Message!]!
 }
 
@@ -88,12 +89,46 @@ type Mutation {
 	far. `false` when no reply is in flight (late stop press).
 	"""
 	stopRun(conversationId: Int!): Boolean!
+	"""
+	Creates a project: name + optional instructions. Local-only container
+	for chats and knowledge.
+	"""
+	createProject(name: String!, instructions: String): MutationCreateProjectResult!
+	renameProject(projectId: Int!, name: String!): MutationRenameProjectResult!
+	"""
+	Sets the project's standing instructions, applied to every chat in
+	the project.
+	"""
+	updateProjectInstructions(projectId: Int!, instructions: String!): MutationUpdateProjectInstructionsResult!
+	"""
+	Deletes a project: its chats survive as plain chats (project_id goes
+	NULL) and its knowledge files are removed with their chunks and bytes.
+	"""
+	deleteProject(projectId: Int!): MutationDeleteProjectResult!
+	"""
+	Claims uploaded files into the project's knowledge folder (the same
+	inline extract→chunk→embed upload path as chat attachments). Only
+	unattached uploads are claimed.
+	"""
+	addProjectKnowledge(projectId: Int!, fileIds: [Int!]!): MutationAddProjectKnowledgeResult!
+}
+
+union MutationAddProjectKnowledgeResult = Error | MutationAddProjectKnowledgeSuccess
+
+type MutationAddProjectKnowledgeSuccess {
+	data: Boolean!
 }
 
 union MutationArchiveConversationResult = Error | MutationArchiveConversationSuccess
 
 type MutationArchiveConversationSuccess {
 	data: Boolean!
+}
+
+union MutationCreateProjectResult = Error | MutationCreateProjectSuccess
+
+type MutationCreateProjectSuccess {
+	data: Project!
 }
 
 union MutationDeleteConversationResult = Error | MutationDeleteConversationSuccess
@@ -108,9 +143,21 @@ type MutationDeleteFileUploadSuccess {
 	data: Boolean!
 }
 
+union MutationDeleteProjectResult = Error | MutationDeleteProjectSuccess
+
+type MutationDeleteProjectSuccess {
+	data: Boolean!
+}
+
 union MutationRenameConversationResult = Error | MutationRenameConversationSuccess
 
 type MutationRenameConversationSuccess {
+	data: Boolean!
+}
+
+union MutationRenameProjectResult = Error | MutationRenameProjectSuccess
+
+type MutationRenameProjectSuccess {
 	data: Boolean!
 }
 
@@ -120,10 +167,29 @@ type MutationSaveSettingsSuccess {
 	data: Settings!
 }
 
+union MutationUpdateProjectInstructionsResult = Error | MutationUpdateProjectInstructionsSuccess
+
+type MutationUpdateProjectInstructionsSuccess {
+	data: Boolean!
+}
+
 union MutationUploadFileResult = Error | MutationUploadFileSuccess
 
 type MutationUploadFileSuccess {
 	data: FileUpload!
+}
+
+type Project {
+	id: ID!
+	name: String!
+	instructions: String!
+	createdAt: String!
+	updatedAt: String!
+	"""
+	This project's live chats, newest first (archive state lives on the
+	conversation rows; archived chats stay out of the project stat here).
+	"""
+	conversations: [Conversation!]!
 }
 
 type Query {
@@ -137,6 +203,11 @@ type Query {
 	currentUser: user!
 	conversations: [Conversation!]!
 	conversation(conversationId: Int!): Conversation
+	"""
+	All projects, oldest first — the sidebar's project groups.
+	"""
+	projects: [Project!]!
+	project(projectId: Int!): Project
 	settings: Settings!
 	"""
 	All uploaded files, oldest first (matches the old resolver's ordering).
@@ -176,7 +247,7 @@ type Subscription {
 	the run registry — which also aborts when no chunk is flowing. Either
 	way the partial reply is persisted.
 	"""
-	conversation(conversationId: Int, message: String!, fileIds: [Int!]): SubscriptionConversationResult!
+	conversation(conversationId: Int, message: String!, fileIds: [Int!], projectId: Int): SubscriptionConversationResult!
 }
 
 union SubscriptionConversationResult = Error | SubscriptionConversationSuccess

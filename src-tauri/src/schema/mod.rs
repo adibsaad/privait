@@ -7,6 +7,7 @@
 mod chat;
 mod files;
 mod mutation;
+mod projects;
 mod query;
 mod settings;
 mod user;
@@ -22,6 +23,7 @@ pub use chat::{
 };
 pub use files::{GqlFileStatus, GqlFileType, GqlFileUpload};
 pub use mutation::Mutation;
+pub use projects::GqlProject;
 pub use query::Query;
 pub use settings::{GqlSettings, SettingsInput};
 pub use user::LocalUser;

@@ -23,6 +23,7 @@ gql(/* GraphQL */ `
       id
       title
       archived
+      projectId
       messages {
         __typename
         id
@@ -123,6 +124,7 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
           id: c.id,
           status: 'regular' as const,
           title: c.title,
+          projectId: c.projectId ?? null,
         })),
     )
     setArchivedThreadList(
