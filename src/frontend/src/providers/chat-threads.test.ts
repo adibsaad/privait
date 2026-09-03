@@ -168,6 +168,7 @@ describe('withOptimisticThread', () => {
     ])
 
     expect(next[0]).toEqual({
+      projectId: null,
       id: EMPTY_THREAD_ID,
       status: 'regular' as const,
       title: '',
@@ -196,7 +197,7 @@ describe('reconcileThreadList', () => {
     const next = reconcileThreadList(list, '9')
 
     expect(next).toEqual([
-      { id: '9', status: 'regular' as const, title: '' },
+      { id: '9', status: 'regular' as const, title: '', projectId: null },
       { id: '7', status: 'regular' as const, title: 'old' },
     ])
     expect(next.some(t => t.id === EMPTY_THREAD_ID)).toBe(false)

@@ -49,7 +49,7 @@ What outcome this achieves and why it matters (2-5 sentences).
 1. Pick the next task from `ready/` (lowest number first unless noted otherwise).
 2. `git mv docs/project/tasks/ready/XXXX-*.md docs/project/tasks/doing/` when starting.
 3. Work it; commit normally. Reference the id in commit messages (`[0003]`).
-4. When every acceptance criterion is verified (tests, build, manual check — see `tasks/lessons.md`), move to `done/`.
+4. When every acceptance criterion is verified (tests, build, manual check — see `docs/lessons.md`), move to `done/`.
 5. If blocked, keep it in `doing/` and append a `## Blocked` section describing what and why — don't silently stall.
 6. `tasks/todo.md` (if present) is a scratch overview; the kanban files are authoritative per-task.
 

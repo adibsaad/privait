@@ -2,7 +2,15 @@ import { useEffect, useState } from 'react'
 
 import { gql } from '@apollo/client'
 import { useMutation, useQuery } from '@apollo/client/react'
-import { ArchiveIcon, InfoIcon, KeyRound, Undo2Icon } from 'lucide-react'
+import {
+  ArchiveIcon,
+  BrainIcon,
+  InfoIcon,
+  KeyRound,
+  PlusIcon,
+  TrashIcon,
+  Undo2Icon,
+} from 'lucide-react'
 import { toast } from 'sonner'
 
 import { Button } from '@frontend/components/ui/button'
@@ -18,8 +26,12 @@ import { Label } from '@frontend/components/ui/label'
 import {
   AllConversationsDocument,
   ArchiveConversationDocument,
+  CreateMemoryDocument,
+  DeleteMemoryDocument,
   GetSettingsDocument,
+  MemoriesDocument,
   SaveSettingsDocument,
+  UpdateMemoryDocument,
 } from '@frontend/graphql/output/graphql'
 import { thirdPartyLicenses } from '@frontend/lib/tauri'
 import { cn } from '@frontend/lib/utils'
@@ -52,12 +64,56 @@ gql(/* GraphQL */ `
       }
     }
   }
+
+  query Memories {
+    memories {
+      id
+      content
+      source
+      conversationId
+      updatedAt
+    }
+  }
+
+  mutation CreateMemory($content: String!) {
+    createMemory(content: $content) {
+      __typename
+      ... on MutationCreateMemorySuccess {
+        data {
+          id
+          content
+        }
+      }
+      ... on Error {
+        message
+      }
+    }
+  }
+
+  mutation UpdateMemory($input: MemoryUpdateInput!) {
+    updateMemory(input: $input) {
+      __typename
+      ... on Error {
+        message
+      }
+    }
+  }
+
+  mutation DeleteMemory($memoryId: Int!) {
+    deleteMemory(memoryId: $memoryId) {
+      __typename
+      ... on Error {
+        message
+      }
+    }
+  }
 `)
 
-type Section = 'provider' | 'archived' | 'about'
+type Section = 'provider' | 'memories' | 'archived' | 'about'
 
 const SECTIONS: { id: Section; label: string; icon: typeof KeyRound }[] = [
   { id: 'provider', label: 'Provider', icon: KeyRound },
+  { id: 'memories', label: 'Memories', icon: BrainIcon },
   { id: 'archived', label: 'Archived chats', icon: ArchiveIcon },
   { id: 'about', label: 'About', icon: InfoIcon },
 ]
@@ -96,6 +152,8 @@ export function SettingsDialog({
         <div className="min-w-0 flex-1">
           {section === 'provider' ? (
             <ProviderSection />
+          ) : section === 'memories' ? (
+            <MemoriesSection />
           ) : section === 'archived' ? (
             <ArchivedChatsSection />
           ) : (
@@ -187,6 +245,152 @@ function ProviderSection() {
         <Button onClick={save} disabled={saving}>
           Save
         </Button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Everything stored about you, visible and deletable — no hidden profiling.
+ * Distilled memories carry the chat that produced them.
+ */
+function MemoriesSection() {
+  const { data, loading } = useQuery(MemoriesDocument)
+  const [createMemory] = useMutation(CreateMemoryDocument, {
+    refetchQueries: [MemoriesDocument],
+  })
+  const [updateMemory] = useMutation(UpdateMemoryDocument, {
+    refetchQueries: [MemoriesDocument],
+  })
+  const [deleteMemory] = useMutation(DeleteMemoryDocument, {
+    refetchQueries: [MemoriesDocument],
+  })
+  const [draft, draftSet] = useState('')
+  const [editingId, editingIdSet] = useState<string | null>(null)
+  const [editingText, editingTextSet] = useState('')
+
+  const memories = data?.memories ?? []
+
+  const add = async () => {
+    const content = draft.trim()
+    if (!content) {
+      return
+    }
+    draftSet('')
+    const result = await createMemory({ variables: { content } })
+    if (result.data?.createMemory.__typename === 'Error') {
+      toast.error(result.data.createMemory.message)
+    }
+  }
+
+  const saveEdit = async () => {
+    const memoryId = editingId
+    const content = editingText.trim()
+    if (!memoryId || !content) {
+      editingIdSet(null)
+      return
+    }
+    editingIdSet(null)
+    await updateMemory({
+      variables: { input: { id: Number(memoryId), content } },
+    })
+  }
+
+  return (
+    <div className="flex h-full flex-col gap-3 p-4">
+      <div>
+        <h3 className="text-sm font-semibold">Memories</h3>
+        <p className="text-muted-foreground text-xs">
+          What the AI remembers across chats. Every memory is visible here —
+          edit or delete anything, anytime.
+        </p>
+      </div>
+      <div className="flex gap-2">
+        <Input
+          value={draft}
+          onChange={e => draftSet(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter') {
+              void add()
+            }
+          }}
+          placeholder="Add a memory, e.g. I plan my week on Sundays"
+        />
+        <Button onClick={() => void add()} aria-label="Add memory">
+          <PlusIcon className="size-4" />
+        </Button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto border-t pt-3">
+        {loading ? (
+          <p className="text-muted-foreground text-sm">Loading…</p>
+        ) : memories.length === 0 ? (
+          <p className="text-muted-foreground text-sm">
+            No memories yet. They appear as you chat (distilled memories show
+            the chat they came from) or when you add them here.
+          </p>
+        ) : (
+          <ul className="flex flex-col gap-2">
+            {memories.map(memory => (
+              <li key={memory.id} className="rounded-md border p-2 text-sm">
+                {editingId === memory.id ? (
+                  <div className="flex gap-2">
+                    <Input
+                      value={editingText}
+                      onChange={e => editingTextSet(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          void saveEdit()
+                        }
+                      }}
+                      autoFocus
+                    />
+                    <Button onClick={() => void saveEdit()}>Save</Button>
+                  </div>
+                ) : (
+                  <div className="flex items-start gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p className="break-words">{memory.content}</p>
+                      <p className="text-muted-foreground text-xs">
+                        {memory.source === 'DISTILLED' ? 'distilled' : 'manual'}
+                        {memory.conversationId != null
+                          ? ` · from chat #${memory.conversationId}`
+                          : ''}
+                        {memory.updatedAt
+                          ? ` · ${new Date(memory.updatedAt).toLocaleDateString()}`
+                          : ''}
+                      </p>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-7"
+                      aria-label="Edit memory"
+                      onClick={() => {
+                        editingIdSet(memory.id)
+                        editingTextSet(memory.content)
+                      }}
+                    >
+                      <Undo2Icon className="size-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="size-7 text-red-500"
+                      aria-label="Delete memory"
+                      onClick={() =>
+                        void deleteMemory({
+                          variables: { memoryId: Number(memory.id) },
+                        })
+                      }
+                    >
+                      <TrashIcon className="size-4" />
+                    </Button>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   )

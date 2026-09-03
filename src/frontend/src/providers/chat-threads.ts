@@ -171,18 +171,26 @@ export function dropNewThreadBucket(threads: ThreadsMap): ThreadsMap {
 /**
  * Optimistically shows the in-progress new chat in the sidebar (selected,
  * fallback title) the moment the first message is sent — before the backend
- * has created the conversation.
+ * has created the conversation. A chat opened inside a project keeps the
+ * group while it's still optimistic.
  */
-export function withOptimisticThread(threadList: Thread[]): Thread[] {
+export function withOptimisticThread(
+  threadList: Thread[],
+  projectId: number | null = null,
+): Thread[] {
   if (threadList.some(t => t.id === EMPTY_THREAD_ID)) {
     return threadList
   }
-  return [{ id: EMPTY_THREAD_ID, status: 'regular', title: '' }, ...threadList]
+  return [
+    { id: EMPTY_THREAD_ID, status: 'regular', title: '', projectId },
+    ...threadList,
+  ]
 }
 
 /**
  * Swaps the optimistic sidebar entry for the real conversation once its id
- * arrives with the first streamed chunk.
+ * arrives with the first streamed chunk. The project assignment carries
+ * over so the chat stays in its group.
  */
 export function reconcileThreadList(
   threadList: Thread[],
@@ -195,7 +203,12 @@ export function reconcileThreadList(
     }
     return withoutPending
   }
-  return [{ id: threadId, status: 'regular', title: '' }, ...withoutPending]
+  const projectId =
+    threadList.find(t => t.id === EMPTY_THREAD_ID)?.projectId ?? null
+  return [
+    { id: threadId, status: 'regular', title: '', projectId },
+    ...withoutPending,
+  ]
 }
 
 /** Minimal shape of a cached conversation row (apollo AllConversations). */
@@ -203,6 +216,7 @@ export type CachedConversation = {
   id: string
   archived: boolean
   title: string
+  projectId?: number | null
 }
 
 /**

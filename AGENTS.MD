@@ -16,7 +16,7 @@
 
 ### 3. Self-Improvement Loop
 
-- After ANY correction from the user: update 'tasks/lessons.md' with the pattern
+- After ANY correction from the user: update 'docs/lessons.md' with the pattern
 - Write rules for yourself that prevent the same mistake
 - Ruthlessly iterate on these lessons until mistake rate drops
 - Review lessons at session start for relevant project
@@ -49,7 +49,7 @@
 3. **Track Progress**: Mark items complete as you go
 4. **Explain Changes**: High-level summary at each step
 5. **Document Results**: Add review section to 'tasks/todo.md'
-6. **Capture Lessons**: Update 'tasks/lessons.md' after corrections
+6. **Capture Lessons**: Update 'docs/lessons.md' after corrections
 
 ## Project Board
 
@@ -68,10 +68,10 @@
 
 This repo is written by agents; the human directs and reviews architecture/design. Full protocol: `docs/agents-guide.md` — read it once before your first task here. Hard rules that always apply:
 
-- **Session start**: read `tasks/lessons.md` + your task file before coding; check `docs/architecture.md`'s decision table before contradicting a decision.
+- **Session start**: read `docs/lessons.md` + your task file before coding; check `docs/architecture.md`'s decision table before contradicting a decision.
 - **Escalate before implementing** (append a `## Design` section to the task file, then stop): new outbound network path, new dependency, DB schema/migrations, GraphQL contract changes, scope beyond the task file.
 - **Privacy invariants**: no telemetry; never log user content; all processing local; data leaves only via user-configured providers. Violation = failed review, always.
-- **Doc routing**: corrections → `tasks/lessons.md`; decisions → `docs/architecture.md`; direction → vision/roadmap (human approves). Decisions that live only in chat are lost.
+- **Doc routing**: corrections → `docs/lessons.md`; decisions → `docs/architecture.md`; direction → vision/roadmap (human approves). Decisions that live only in chat are lost.
 - **Scope discipline**: finish the task file, nothing else; file unrelated bugs as tasks; parallel agents touch disjoint files.
 
 

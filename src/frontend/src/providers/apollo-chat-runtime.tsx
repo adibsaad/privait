@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState, createContext, useContext } from 'react'
 import { useNavigate } from 'react-router-dom'
 
 import { gql } from '@apollo/client'
@@ -6,7 +6,6 @@ import {
   useApolloClient,
   useLazyQuery,
   useMutation,
-  useSubscription,
 } from '@apollo/client/react'
 import {
   AttachmentAdapter,
@@ -28,6 +27,7 @@ import {
   DeleteConversationDocument,
   GetConversationDocument,
   RenameConversationDocument,
+  StopRunDocument,
   UploadFileDocument,
 } from '@frontend/graphql/output/graphql'
 import {
@@ -47,11 +47,13 @@ gql(/* GraphQL */ `
     $conversationId: Int
     $message: String!
     $fileIds: [Int!]
+    $projectId: Int
   ) {
     conversation(
       conversationId: $conversationId
       message: $message
       fileIds: $fileIds
+      projectId: $projectId
     ) {
       __typename
 
@@ -127,11 +129,44 @@ gql(/* GraphQL */ `
       }
     }
   }
+
+  mutation StopRun($conversationId: Int!) {
+    stopRun(conversationId: $conversationId)
+  }
 `)
 
 /** Same allowlist the backend enforces (files.rs). */
 const ATTACHMENT_ACCEPT =
   '.pdf,.txt,.md,.csv,.html,application/pdf,text/plain,text/markdown,text/csv,text/html'
+
+/**
+ * Sidebar actions, exposed for the custom grouped thread list: the
+ * assistant-ui thread-list primitives don't support project groups, so the
+ * list calls these directly. Backed by the same logic as the runtime's
+ * ExternalStoreThreadListAdapter.
+ */
+export type ThreadActions = {
+  switchTo: (threadId: string) => void
+  switchToNew: () => void
+  newThreadInProject: (projectId: number) => void
+  rename: (threadId: string, title: string) => void
+  archive: (threadId: string) => void
+  remove: (threadId: string) => void
+  /** Conversations with a run in flight (streaming or queued). */
+  runningThreadIds: ReadonlySet<string>
+}
+
+export const ThreadActionsContext = createContext<ThreadActions | null>(null)
+
+export function useThreadActions(): ThreadActions {
+  const actions = useContext(ThreadActionsContext)
+  if (!actions) {
+    throw new Error(
+      'useThreadActions must be used within ApolloChatRuntimeProvider',
+    )
+  }
+  return actions
+}
 
 type PendingUpload = { attachmentId: string; file: File }
 
@@ -192,24 +227,26 @@ export function ApolloChatRuntimeProvider({
 }: {
   children: React.ReactNode
 }) {
-  const gotFirstChunkRef = useRef(false)
-  // Attachments of the in-flight send, carried onto the persisted user
-  // message when the first chunk swaps the optimistic bubble.
-  const pendingAttachmentsRef = useRef<UserAttachment[]>([])
   // Selecting a thread (from the sidebar, on any route) must land the user
   // on the chat page.
   const navigate = useNavigate()
-  const [nextMessage, nextMessageSet] = useState<{
-    msg: string
-    conversationId: number | null
-    fileIds: number[] | null
-  }>({ msg: '', conversationId: null, fileIds: null })
-  const [skipSub, skipSubSet] = useState(true)
-  const [isRunning, isRunningSet] = useState(false)
+  // Chat opened inside a project but not yet created (first send creates it
+  // in the project via the subscription's projectId).
+  const [composerProjectId, composerProjectIdSet] = useState<number | null>(
+    null,
+  )
+  // Which conversations are generating, server-tracked via the run registry.
+  // `isRunning` is per-thread: a streaming chat must not freeze other
+  // chats' composers, and coming back to it must show it still running.
+  // Multiple chats can stream at once (backend caps concurrency + queues).
+  const [runningThreadIds, runningThreadIdsSet] = useState<ReadonlySet<string>>(
+    new Set(),
+  )
   const [deleteConversationMut] = useMutation(DeleteConversationDocument)
   const [renameConversationMut] = useMutation(RenameConversationDocument)
   const [archiveConversationMut] = useMutation(ArchiveConversationDocument)
   const [uploadFileMut] = useMutation(UploadFileDocument)
+  const [stopRunMut] = useMutation(StopRunDocument)
   const [loadConversation] = useLazyQuery(GetConversationDocument)
   const apolloClient = useApolloClient()
   const { adapter, takeFiles } = useComposerAttachmentAdapter()
@@ -249,6 +286,176 @@ export function ApolloChatRuntimeProvider({
     threads,
     setThreads,
   } = useThreadContext()
+
+  // Stream callbacks read the selection fresh (subscription callbacks can
+  // hold stale closures while chunks keep arriving across navigations).
+  const currentThreadIdRef = useRef(currentThreadId)
+  useEffect(() => {
+    currentThreadIdRef.current = currentThreadId
+  }, [currentThreadId])
+
+  // ---------------------------------------------------------------------------
+  // Parallel streams: one live GraphQL subscription per in-flight run,
+  // managed imperatively (a single useSubscription hook would re-subscribe
+  // and kill the previous stream). The backend's run registry caps how many
+  // run concurrently and queues the rest, so the client just opens streams.
+  // ---------------------------------------------------------------------------
+
+  type ActiveStream = {
+    unsubscribe: () => void
+    /** Conversation the stream belongs to; null until the first chunk of a
+     * brand-new chat carries the real id. */
+    threadId: string | null
+  }
+  const activeStreamsRef = useRef(new Map<string, ActiveStream>())
+
+  const syncRunningThreadIds = () => {
+    runningThreadIdsSet(
+      new Set(
+        [...activeStreamsRef.current.values()]
+          .map(stream => stream.threadId)
+          .filter((id): id is string => id != null),
+      ),
+    )
+  }
+
+  const startStream: (opts: {
+    conversationId: number | null
+    message: string
+    fileIds: number[] | null
+    projectId: number | null
+    optimisticThreadId: string
+    attachments: UserAttachment[]
+  }) => void = opts => {
+    const streamId = crypto.randomUUID()
+    // Per-stream state (parallel streams must not share anything mutable).
+    let threadId: string | null = opts.optimisticThreadId
+    let gotFirstChunk = false
+    let attachments = opts.attachments
+
+    const finalize = () => {
+      activeStreamsRef.current.get(streamId)?.unsubscribe()
+      activeStreamsRef.current.delete(streamId)
+      syncRunningThreadIds()
+    }
+
+    const handleData = (data: unknown) => {
+      const conversation = (
+        data as {
+          conversation?: {
+            __typename?: string
+            message?: string
+            data?: {
+              conversationId?: string
+              messageId?: string
+              previousMessageId?: string
+              messageChunk?: string
+              done?: boolean | null
+            }
+          }
+        }
+      ).conversation
+
+      if (conversation?.__typename === 'Error') {
+        // Provider failures arrive as union error payloads; surface them and
+        // release the composer (the stream ends after the error arm).
+        toast.error(conversation.message ?? 'Chat failed')
+        finalize()
+        return
+      }
+
+      if (conversation?.data?.done) {
+        finalize()
+        return
+      }
+
+      const chunkThreadId = conversation?.data?.conversationId
+      const messageId = conversation?.data?.messageId
+      const previousMessageId = conversation?.data?.previousMessageId
+      const chunk = conversation?.data?.messageChunk ?? ''
+      if (!messageId || !chunkThreadId || !previousMessageId) {
+        return
+      }
+
+      if (!gotFirstChunk) {
+        gotFirstChunk = true
+
+        setThreads(prev =>
+          reconcileFirstChunk(
+            prev,
+            chunkThreadId,
+            userMessage(previousMessageId, opts.message, attachments),
+          ),
+        )
+        // Chips are re-rendered from the persisted message from here on.
+        attachments = []
+
+        setThreadList(prev => reconcileThreadList(prev, chunkThreadId))
+
+        // A brand-new chat was parked on the empty view — follow it to its
+        // real id. A streaming chat that isn't on screen must NOT yank the
+        // viewport back: chunks append to their own thread.
+        if (currentThreadIdRef.current === EMPTY_THREAD_ID) {
+          setCurrentThreadId(chunkThreadId)
+        }
+        if (threadId !== chunkThreadId) {
+          threadId = chunkThreadId
+          activeStreamsRef.current.get(streamId)!.threadId = chunkThreadId
+          syncRunningThreadIds()
+        }
+
+        loadConversation({
+          variables: { id: Number(chunkThreadId) },
+        }).then(value => {
+          const title = value.data?.conversation?.title
+          if (!title) {
+            return
+          }
+          setThreadList(prev =>
+            prev.map(t =>
+              t.id === chunkThreadId
+                ? {
+                    ...t,
+                    title,
+                  }
+                : t,
+            ),
+          )
+        })
+      }
+
+      setThreads(prev =>
+        appendAssistantChunk(prev, chunkThreadId, messageId, chunk),
+      )
+    }
+
+    const subscription = apolloClient
+      .subscribe({
+        query: ConversationSubDocument,
+        variables: {
+          conversationId: opts.conversationId,
+          message: opts.message,
+          fileIds: opts.fileIds,
+          projectId: opts.projectId,
+        },
+      })
+      .subscribe({
+        next: result => handleData(result.data),
+        error: (err: Error) => {
+          toast.error(err.message ?? 'Chat failed')
+          finalize()
+        },
+        complete: () => {},
+      })
+
+    activeStreamsRef.current.set(streamId, {
+      unsubscribe: () => subscription.unsubscribe(),
+      threadId,
+    })
+    syncRunningThreadIds()
+  }
+
+  const isRunning = runningThreadIds.has(currentThreadId)
   const threadListAdapter: ExternalStoreThreadListAdapter = {
     threadId: currentThreadId,
     threads: threadList,
@@ -259,6 +466,7 @@ export function ApolloChatRuntimeProvider({
       // Drop any optimistic messages left in the "new thread" bucket.
       setThreads(prev => dropNewThreadBucket(prev))
       setCurrentThreadId(EMPTY_THREAD_ID)
+      composerProjectIdSet(null)
       navigate('/chat')
     },
 
@@ -288,7 +496,7 @@ export function ApolloChatRuntimeProvider({
 
       setThreadList(prev => prev.filter(t => t.id !== threadId))
       setArchivedThreadList(prev => [
-        { ...thread, status: 'archived' },
+        { id: thread.id, title: thread.title, status: 'archived' },
         ...prev,
       ])
       syncCache(threadId, { archived: true })
@@ -357,94 +565,6 @@ export function ApolloChatRuntimeProvider({
     },
   }
 
-  useSubscription(ConversationSubDocument, {
-    variables: {
-      conversationId: nextMessage.conversationId,
-      message: nextMessage.msg,
-      fileIds: nextMessage.fileIds,
-    },
-    onData: newMessage => {
-      if (newMessage.data.data?.conversation?.__typename === 'Error') {
-        // Provider failures arrive as union error payloads; surface them and
-        // release the composer (the stream ends after the error arm).
-        const message =
-          newMessage.data.data?.conversation?.message ?? 'Chat failed'
-        toast.error(message)
-        skipSubSet(true)
-        isRunningSet(false)
-        gotFirstChunkRef.current = false
-        return
-      }
-
-      if (newMessage.data.data?.conversation?.data.done) {
-        skipSubSet(true)
-        isRunningSet(false)
-        gotFirstChunkRef.current = false
-      } else {
-        const threadId = newMessage.data.data?.conversation?.data.conversationId
-        const messageId = newMessage.data.data?.conversation?.data.messageId
-        const previousMessageId =
-          newMessage.data.data?.conversation?.data.previousMessageId
-        const chunk =
-          newMessage.data.data?.conversation?.data.messageChunk ?? ''
-
-        if (!messageId || !threadId || !previousMessageId) {
-          return
-        }
-
-        if (!gotFirstChunkRef.current) {
-          gotFirstChunkRef.current = true
-
-          setThreads(prev =>
-            reconcileFirstChunk(
-              prev,
-              threadId,
-              userMessage(
-                previousMessageId,
-                nextMessage.msg,
-                pendingAttachmentsRef.current,
-              ),
-            ),
-          )
-
-          setThreadList(prev => reconcileThreadList(prev, threadId))
-
-          loadConversation({
-            variables: {
-              id: Number(threadId),
-            },
-          }).then(value => {
-            const title = value.data?.conversation?.title
-            if (!title) {
-              return
-            }
-
-            setThreadList(prev =>
-              prev.map(t =>
-                t.id === threadId
-                  ? {
-                      ...t,
-                      title,
-                    }
-                  : t,
-              ),
-            )
-          })
-
-          // Chips are re-rendered from the persisted message from here on.
-          pendingAttachmentsRef.current = []
-        }
-
-        setThreads(prev =>
-          appendAssistantChunk(prev, threadId, messageId, chunk),
-        )
-
-        setCurrentThreadId(threadId)
-      }
-    },
-    skip: skipSub,
-  })
-
   const onNew = async (message: ThreadMessageLike) => {
     const firstPart = message.content[0]
     const text =
@@ -497,32 +617,125 @@ export function ApolloChatRuntimeProvider({
     const attachments: UserAttachment[] = (message.attachments ?? []).map(
       a => ({ id: a.id, name: a.name }),
     )
-    pendingAttachmentsRef.current = attachments
     setThreads(prev =>
       withOptimisticUserMessage(prev, currentThreadId, text, attachments),
     )
     // Brand-new chats also appear in the sidebar immediately, selected
     // with a fallback title, and get their real id on the first chunk.
+    // A chat opened inside a project stays in its group while optimistic.
     if (currentThreadId === EMPTY_THREAD_ID) {
-      setThreadList(prev => withOptimisticThread(prev))
+      setThreadList(prev => withOptimisticThread(prev, composerProjectId))
     }
 
-    nextMessageSet({
-      msg: text,
+    // One live stream per send: parallel sends run concurrently (the
+    // backend caps and queues them), so nothing here cancels other chats.
+    startStream({
       conversationId: Number(currentThreadId),
+      message: text,
       fileIds,
+      projectId: composerProjectId,
+      optimisticThreadId: currentThreadId,
+      attachments,
     })
-    gotFirstChunkRef.current = false
-    skipSubSet(false)
-    isRunningSet(true)
   }
 
-  // Stop button: unsubscribe; the backend drops the stream on `complete`
-  // and aborts the provider request, keeping the partial reply.
+  const threadActions: ThreadActions = {
+    runningThreadIds,
+    switchTo: threadId => {
+      setCurrentThreadId(threadId)
+      navigate('/chat')
+    },
+    switchToNew: () => {
+      setThreads(prev => dropNewThreadBucket(prev))
+      setCurrentThreadId(EMPTY_THREAD_ID)
+      composerProjectIdSet(null)
+      navigate('/chat')
+    },
+    newThreadInProject: projectId => {
+      setThreads(prev => dropNewThreadBucket(prev))
+      setCurrentThreadId(EMPTY_THREAD_ID)
+      composerProjectIdSet(projectId)
+      navigate('/chat')
+    },
+    rename: (threadId, newTitle) => {
+      setThreadList(prev =>
+        prev.map(t => (t.id === threadId ? { ...t, title: newTitle } : t)),
+      )
+      syncCache(threadId, { title: newTitle })
+      if (Number(threadId)) {
+        renameConversationMut({
+          variables: { conversationId: Number(threadId), title: newTitle },
+        })
+      }
+    },
+    archive: threadId => {
+      const thread = threadList.find(t => t.id === threadId)
+      if (!thread) {
+        return
+      }
+      setThreadList(prev => prev.filter(t => t.id !== threadId))
+      setArchivedThreadList(prev => [
+        { id: thread.id, title: thread.title, status: 'archived' },
+        ...prev,
+      ])
+      syncCache(threadId, { archived: true })
+      if (Number(threadId)) {
+        archiveConversationMut({
+          variables: { conversationId: Number(threadId), archived: true },
+        })
+      }
+      if (currentThreadId === threadId) {
+        setCurrentThreadId(EMPTY_THREAD_ID)
+        navigate('/chat')
+      }
+    },
+    remove: threadId => {
+      let nextThreadId: string | null = null
+      setThreadList(prev => {
+        const newList = prev.filter(t => t.id !== threadId)
+        if (newList.length) {
+          nextThreadId = newList[0].id
+        }
+        return newList
+      })
+      setThreads(prev => {
+        const next = new Map(prev)
+        next.delete(threadId)
+        return next
+      })
+      if (currentThreadId === threadId) {
+        setCurrentThreadId(nextThreadId ?? EMPTY_THREAD_ID)
+      }
+      syncCache(threadId, 'remove')
+      if (Number(threadId)) {
+        deleteConversationMut({
+          variables: { conversationId: Number(threadId) },
+        })
+      }
+    },
+  }
+
+  // Stop button: ask the backend to abort the run (it cancels the provider
+  // request even mid-stall and keeps the partial reply), then unsubscribe
+  // this thread's stream. Other chats' streams keep running. The backend's
+  // receiver-drop kill switch stays as the fallback path.
   const onCancel = async () => {
-    skipSubSet(true)
-    isRunningSet(false)
-    gotFirstChunkRef.current = false
+    const threadId = currentThreadIdRef.current
+    if (!threadId || !runningThreadIds.has(threadId)) {
+      return
+    }
+    if (Number(threadId)) {
+      stopRunMut({
+        variables: { conversationId: Number(threadId) },
+      }).catch(() => {})
+    }
+    for (const [streamId, stream] of [...activeStreamsRef.current]) {
+      if (stream.threadId === threadId) {
+        stream.unsubscribe()
+        activeStreamsRef.current.delete(streamId)
+      }
+    }
+    syncRunningThreadIds()
   }
 
   const runtime = useExternalStoreRuntime({
@@ -543,8 +756,10 @@ export function ApolloChatRuntimeProvider({
   })
 
   return (
-    <AssistantRuntimeProvider runtime={runtime}>
-      {children}
-    </AssistantRuntimeProvider>
+    <ThreadActionsContext.Provider value={threadActions}>
+      <AssistantRuntimeProvider runtime={runtime}>
+        {children}
+      </AssistantRuntimeProvider>
+    </ThreadActionsContext.Provider>
   )
 }
