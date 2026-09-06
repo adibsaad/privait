@@ -1,12 +1,13 @@
 import { FC, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 
 import { gql } from '@apollo/client'
 import { useMutation, useQuery } from '@apollo/client/react'
 import { AuiIf, ThreadListPrimitive } from '@assistant-ui/react'
 import {
   ArchiveIcon,
+  ChevronDownIcon,
   EyeOffIcon,
-  FolderIcon,
   LoaderCircleIcon,
   MoreHorizontalIcon,
   PlusIcon,
@@ -50,7 +51,6 @@ import { useThreadActions } from '@frontend/providers/apollo-chat-runtime'
 
 export const ThreadList: FC = () => {
   const { threadList } = useThreadContext()
-  const actions = useThreadActions()
   const { data } = useQuery(ProjectsDocument)
   const [deleteProject] = useMutation(DeleteProjectDocument, {
     refetchQueries: [ProjectsDocument, AllConversationsDocument],
@@ -66,6 +66,10 @@ export const ThreadList: FC = () => {
     id: number
     name: string
   } | null>(null)
+  const [collapsedProjects, collapsedProjectsSet] = useState<
+    ReadonlySet<number>
+  >(new Set())
+  const navigate = useNavigate()
 
   const projects = data?.projects ?? []
   const projectThreads = new Map<number, Thread[]>()
@@ -98,15 +102,45 @@ export const ThreadList: FC = () => {
         </Button>
       </div>
       {projects.map(project => {
-        const chats = projectThreads.get(Number(project.id)) ?? []
+        const allChats = (projectThreads.get(Number(project.id)) ?? []).sort(
+          (a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''),
+        )
+        // Claude-style: the sidebar lists the most recent 5; the project
+        // page lists them all.
+        const chats = allChats.slice(0, 5)
+        const collapsed = collapsedProjects.has(Number(project.id))
         return (
           <div key={project.id} className="flex flex-col gap-1">
-            <div className="group flex h-8 items-center gap-2 rounded-lg px-3 text-sm font-medium hover:bg-neutral-100 dark:hover:bg-neutral-800">
-              <FolderIcon className="text-muted-foreground size-4 shrink-0" />
-              <span className="min-w-0 flex-1 truncate">{project.name}</span>
+            <div className="group flex h-8 items-center gap-1 rounded-lg px-2 text-sm font-medium hover:bg-neutral-100 dark:hover:bg-neutral-800">
+              <button
+                type="button"
+                aria-label={collapsed ? 'Expand project' : 'Collapse project'}
+                className="text-muted-foreground flex size-5 shrink-0 items-center justify-center"
+                onClick={() =>
+                  collapsedProjectsSet(prev => {
+                    const next = new Set(prev)
+                    if (next.has(Number(project.id))) {
+                      next.delete(Number(project.id))
+                    } else {
+                      next.add(Number(project.id))
+                    }
+                    return next
+                  })
+                }
+              >
+                <ChevronDownIcon
+                  className={`size-3.5 transition-transform ${collapsed ? '-rotate-90' : ''}`}
+                />
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate(`/project/${project.id}`)}
+                className="min-w-0 flex-1 truncate text-start"
+              >
+                {project.name}
+              </button>
               <ProjectRowMenu
                 projectName={project.name}
-                onNewChat={() => actions.newThreadInProject(Number(project.id))}
                 onEdit={() =>
                   editProjectSet({
                     id: Number(project.id),
@@ -122,13 +156,26 @@ export const ThreadList: FC = () => {
                 }
               />
             </div>
-            {chats.map(thread => (
-              <ThreadRow key={thread.id} thread={thread} indent />
-            ))}
-            {chats.length === 0 && (
-              <p className="text-muted-foreground px-3 pb-1 pl-9 text-xs">
-                No chats yet
-              </p>
+            {!collapsed && (
+              <>
+                {chats.map(thread => (
+                  <ThreadRow key={thread.id} thread={thread} indent />
+                ))}
+                {allChats.length === 0 && (
+                  <p className="text-muted-foreground px-3 pb-1 pl-9 text-xs">
+                    No chats yet — open the project to start one
+                  </p>
+                )}
+                {allChats.length > 5 && (
+                  <button
+                    type="button"
+                    className="text-muted-foreground px-3 pb-1 pl-9 text-start text-xs hover:underline"
+                    onClick={() => navigate(`/project/${project.id}`)}
+                  >
+                    View all {allChats.length} chats
+                  </button>
+                )}
+              </>
             )}
           </div>
         )
@@ -200,10 +247,9 @@ export const ThreadList: FC = () => {
 
 const ProjectRowMenu: FC<{
   projectName: string
-  onNewChat: () => void
   onEdit: () => void
   onDelete: () => void
-}> = ({ projectName, onNewChat, onEdit, onDelete }) => {
+}> = ({ projectName, onEdit, onDelete }) => {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -217,7 +263,6 @@ const ProjectRowMenu: FC<{
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-40">
-        <DropdownMenuItem onSelect={onNewChat}>New chat</DropdownMenuItem>
         <DropdownMenuItem onSelect={onEdit}>Edit project</DropdownMenuItem>
         <DropdownMenuItem className="text-red-500" onSelect={onDelete}>
           Delete project

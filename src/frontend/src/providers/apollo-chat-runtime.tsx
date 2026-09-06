@@ -148,7 +148,9 @@ const ATTACHMENT_ACCEPT =
 export type ThreadActions = {
   switchTo: (threadId: string) => void
   switchToNew: () => void
-  newThreadInProject: (projectId: number) => void
+  /** Starts a brand-new chat inside the project with the given first
+   * message (the project page's composer) and lands the user in it. */
+  sendMessageInProject: (projectId: number, text: string) => void
   rename: (threadId: string, title: string) => void
   archive: (threadId: string) => void
   remove: (threadId: string) => void
@@ -230,11 +232,6 @@ export function ApolloChatRuntimeProvider({
   // Selecting a thread (from the sidebar, on any route) must land the user
   // on the chat page.
   const navigate = useNavigate()
-  // Chat opened inside a project but not yet created (first send creates it
-  // in the project via the subscription's projectId).
-  const [composerProjectId, composerProjectIdSet] = useState<number | null>(
-    null,
-  )
   // Which conversations are generating, server-tracked via the run registry.
   // `isRunning` is per-thread: a streaming chat must not freeze other
   // chats' composers, and coming back to it must show it still running.
@@ -466,7 +463,6 @@ export function ApolloChatRuntimeProvider({
       // Drop any optimistic messages left in the "new thread" bucket.
       setThreads(prev => dropNewThreadBucket(prev))
       setCurrentThreadId(EMPTY_THREAD_ID)
-      composerProjectIdSet(null)
       navigate('/chat')
     },
 
@@ -622,9 +618,8 @@ export function ApolloChatRuntimeProvider({
     )
     // Brand-new chats also appear in the sidebar immediately, selected
     // with a fallback title, and get their real id on the first chunk.
-    // A chat opened inside a project stays in its group while optimistic.
     if (currentThreadId === EMPTY_THREAD_ID) {
-      setThreadList(prev => withOptimisticThread(prev, composerProjectId))
+      setThreadList(prev => withOptimisticThread(prev))
     }
 
     // One live stream per send: parallel sends run concurrently (the
@@ -633,7 +628,7 @@ export function ApolloChatRuntimeProvider({
       conversationId: Number(currentThreadId),
       message: text,
       fileIds,
-      projectId: composerProjectId,
+      projectId: null,
       optimisticThreadId: currentThreadId,
       attachments,
     })
@@ -648,13 +643,24 @@ export function ApolloChatRuntimeProvider({
     switchToNew: () => {
       setThreads(prev => dropNewThreadBucket(prev))
       setCurrentThreadId(EMPTY_THREAD_ID)
-      composerProjectIdSet(null)
       navigate('/chat')
     },
-    newThreadInProject: projectId => {
-      setThreads(prev => dropNewThreadBucket(prev))
+    sendMessageInProject: (projectId, text) => {
+      // The project page's composer: identical optimistic flow to a
+      // new-chat send, scoped to the project. The first chunk reconciles
+      // the optimistic EMPTY bucket into the real conversation (keeping
+      // the project group) and lands the user in the chat.
+      setThreadList(prev => withOptimisticThread(prev, projectId))
+      setThreads(prev => withOptimisticUserMessage(prev, EMPTY_THREAD_ID, text))
+      startStream({
+        conversationId: null,
+        message: text,
+        fileIds: null,
+        projectId,
+        optimisticThreadId: EMPTY_THREAD_ID,
+        attachments: [],
+      })
       setCurrentThreadId(EMPTY_THREAD_ID)
-      composerProjectIdSet(projectId)
       navigate('/chat')
     },
     rename: (threadId, newTitle) => {

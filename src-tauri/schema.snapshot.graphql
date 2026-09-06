@@ -3,6 +3,7 @@ type Conversation {
 	title: String!
 	archived: Boolean!
 	projectId: Int
+	updatedAt: String!
 	messages: [Message!]!
 }
 
@@ -240,6 +241,11 @@ type Project {
 	instructions: String!
 	createdAt: String!
 	updatedAt: String!
+	"""
+	The project's knowledge folder: files claimed into the project that
+	ground its chats.
+	"""
+	knowledgeFiles: [FileUpload!]!
 	"""
 	This project's live chats, newest first (archive state lives on the
 	conversation rows; archived chats stay out of the project stat here).

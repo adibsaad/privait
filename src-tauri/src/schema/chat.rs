@@ -45,6 +45,7 @@ pub struct GqlConversation {
     pub title: String,
     pub archived: bool,
     pub project_id: Option<i64>,
+    pub updated_at: String,
 }
 
 #[Object(name = "Conversation")]
@@ -64,6 +65,11 @@ impl GqlConversation {
     #[graphql(name = "projectId")]
     async fn project_id(&self) -> Option<i64> {
         self.project_id
+    }
+
+    #[graphql(name = "updatedAt")]
+    async fn updated_at(&self) -> &str {
+        &self.updated_at
     }
 
     async fn messages(&self, ctx: &Context<'_>) -> async_graphql::Result<Vec<GqlMessage>> {

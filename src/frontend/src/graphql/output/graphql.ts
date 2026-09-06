@@ -38,6 +38,7 @@ export type Conversation = {
   messages: Array<Message>
   projectId?: Maybe<Scalars['Int']['output']>
   title: Scalars['String']['output']
+  updatedAt: Scalars['String']['output']
 }
 
 export type ConversationMessageChunk = {
@@ -375,6 +376,11 @@ export type Project = {
   createdAt: Scalars['String']['output']
   id: Scalars['ID']['output']
   instructions: Scalars['String']['output']
+  /**
+   * The project's knowledge folder: files claimed into the project that
+   * ground its chats.
+   */
+  knowledgeFiles: Array<FileUpload>
   name: Scalars['String']['output']
   updatedAt: Scalars['String']['output']
 }
@@ -674,6 +680,36 @@ export type CurrentUserQuery = {
   }
 }
 
+export type GetProjectQueryVariables = Exact<{
+  projectId: Scalars['Int']['input']
+}>
+
+export type GetProjectQuery = {
+  __typename?: 'Query'
+  project?: {
+    __typename?: 'Project'
+    id: string
+    name: string
+    instructions: string
+    knowledgeFiles: Array<{
+      __typename?: 'FileUpload'
+      id: string
+      originalName: string
+    }>
+  } | null
+}
+
+export type DeleteKnowledgeFileMutationVariables = Exact<{
+  fileId: Scalars['Int']['input']
+}>
+
+export type DeleteKnowledgeFileMutation = {
+  __typename?: 'Mutation'
+  deleteFileUpload:
+    | { __typename: 'Error'; message: string }
+    | { __typename: 'MutationDeleteFileUploadSuccess' }
+}
+
 export type ConversationSubSubscriptionVariables = Exact<{
   conversationId?: InputMaybe<Scalars['Int']['input']>
   message: Scalars['String']['input']
@@ -781,6 +817,7 @@ export type AllConversationsQuery = {
     title: string
     archived: boolean
     projectId?: number | null
+    updatedAt: string
     messages: Array<{
       __typename: 'Message'
       id: string
@@ -1815,6 +1852,140 @@ export const CurrentUserDocument = {
     },
   ],
 } as unknown as DocumentNode<CurrentUserQuery, CurrentUserQueryVariables>
+export const GetProjectDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'query',
+      name: { kind: 'Name', value: 'GetProject' },
+      variableDefinitions: [
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'projectId' },
+          },
+          type: {
+            kind: 'NonNullType',
+            type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
+          },
+        },
+      ],
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'project' },
+            arguments: [
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'projectId' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'projectId' },
+                },
+              },
+            ],
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                { kind: 'Field', name: { kind: 'Name', value: 'id' } },
+                { kind: 'Field', name: { kind: 'Name', value: 'name' } },
+                {
+                  kind: 'Field',
+                  name: { kind: 'Name', value: 'instructions' },
+                },
+                {
+                  kind: 'Field',
+                  name: { kind: 'Name', value: 'knowledgeFiles' },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      { kind: 'Field', name: { kind: 'Name', value: 'id' } },
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'originalName' },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<GetProjectQuery, GetProjectQueryVariables>
+export const DeleteKnowledgeFileDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'mutation',
+      name: { kind: 'Name', value: 'DeleteKnowledgeFile' },
+      variableDefinitions: [
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'fileId' },
+          },
+          type: {
+            kind: 'NonNullType',
+            type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
+          },
+        },
+      ],
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'deleteFileUpload' },
+            arguments: [
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'fileId' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'fileId' },
+                },
+              },
+            ],
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: { kind: 'Name', value: 'Error' },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'message' },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<
+  DeleteKnowledgeFileMutation,
+  DeleteKnowledgeFileMutationVariables
+>
 export const ConversationSubDocument = {
   kind: 'Document',
   definitions: [
@@ -2449,6 +2620,7 @@ export const AllConversationsDocument = {
                 { kind: 'Field', name: { kind: 'Name', value: 'title' } },
                 { kind: 'Field', name: { kind: 'Name', value: 'archived' } },
                 { kind: 'Field', name: { kind: 'Name', value: 'projectId' } },
+                { kind: 'Field', name: { kind: 'Name', value: 'updatedAt' } },
                 {
                   kind: 'Field',
                   name: { kind: 'Name', value: 'messages' },

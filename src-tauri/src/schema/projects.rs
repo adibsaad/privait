@@ -72,6 +72,39 @@ impl GqlProject {
         &self.updated_at
     }
 
+    /// The project's knowledge folder: files claimed into the project that
+    /// ground its chats.
+    async fn knowledge_files(
+        &self,
+        ctx: &Context<'_>,
+    ) -> async_graphql::Result<Vec<crate::schema::files::GqlFileUpload>> {
+        let db = ctx.data::<Db>()?;
+        let conn = db.get()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, original_name, file_name, mime_type, size, kind, status,
+                    processed_at, created_at
+             FROM files WHERE project_id = ?1 ORDER BY id ASC",
+        )?;
+        let rows = stmt
+            .query_map([self.id], |row| {
+                Ok(crate::schema::files::GqlFileUpload {
+                    row: crate::files::FileRow {
+                        id: row.get(0)?,
+                        original_name: row.get(1)?,
+                        file_name: row.get(2)?,
+                        mime_type: row.get(3)?,
+                        size: row.get(4)?,
+                        kind: row.get(5)?,
+                        status: row.get(6)?,
+                        processed_at: row.get(7)?,
+                        created_at: row.get(8)?,
+                    },
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
     /// This project's live chats, newest first (archive state lives on the
     /// conversation rows; archived chats stay out of the project stat here).
     async fn conversations(
@@ -81,7 +114,7 @@ impl GqlProject {
         let db = ctx.data::<Db>()?;
         let conn = db.get()?;
         let mut stmt = conn.prepare(
-            "SELECT id, title, archived, project_id FROM conversations
+            "SELECT id, title, archived, project_id, updated_at FROM conversations
              WHERE project_id = ?1 AND archived = 0
              ORDER BY updated_at DESC, id DESC",
         )?;
@@ -92,6 +125,7 @@ impl GqlProject {
                     title: row.get(1)?,
                     archived: row.get(2)?,
                     project_id: row.get(3)?,
+                    updated_at: row.get(4)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

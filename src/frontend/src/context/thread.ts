@@ -10,6 +10,8 @@ export type Thread = {
   status: 'regular'
   /** Project this chat belongs to (null = plain chat). */
   projectId?: number | null
+  /** Last activity, for recency sorting in the sidebar. */
+  updatedAt?: string
 }
 
 export type ArchivedThread = {
