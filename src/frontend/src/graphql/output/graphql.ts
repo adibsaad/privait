@@ -575,18 +575,6 @@ export type UpdateProjectInstructionsMutation = {
     | { __typename: 'MutationUpdateProjectInstructionsSuccess' }
 }
 
-export type AddProjectKnowledgeMutationVariables = Exact<{
-  projectId: Scalars['Int']['input']
-  fileIds: Array<Scalars['Int']['input']> | Scalars['Int']['input']
-}>
-
-export type AddProjectKnowledgeMutation = {
-  __typename?: 'Mutation'
-  addProjectKnowledge:
-    | { __typename: 'Error'; message: string }
-    | { __typename: 'MutationAddProjectKnowledgeSuccess' }
-}
-
 export type GetSettingsQueryVariables = Exact<{ [key: string]: never }>
 
 export type GetSettingsQuery = {
@@ -668,6 +656,13 @@ export type DeleteMemoryMutation = {
     | { __typename: 'MutationDeleteMemorySuccess' }
 }
 
+export type TitleBarProjectsQueryVariables = Exact<{ [key: string]: never }>
+
+export type TitleBarProjectsQuery = {
+  __typename?: 'Query'
+  projects: Array<{ __typename?: 'Project'; id: string; name: string }>
+}
+
 export type CurrentUserQueryVariables = Exact<{ [key: string]: never }>
 
 export type CurrentUserQuery = {
@@ -697,6 +692,18 @@ export type GetProjectQuery = {
       originalName: string
     }>
   } | null
+}
+
+export type AddProjectKnowledgeMutationVariables = Exact<{
+  projectId: Scalars['Int']['input']
+  fileIds: Array<Scalars['Int']['input']> | Scalars['Int']['input']
+}>
+
+export type AddProjectKnowledgeMutation = {
+  __typename?: 'Mutation'
+  addProjectKnowledge:
+    | { __typename: 'Error'; message: string }
+    | { __typename: 'MutationAddProjectKnowledgeSuccess' }
 }
 
 export type DeleteKnowledgeFileMutationVariables = Exact<{
@@ -1326,101 +1333,6 @@ export const UpdateProjectInstructionsDocument = {
   UpdateProjectInstructionsMutation,
   UpdateProjectInstructionsMutationVariables
 >
-export const AddProjectKnowledgeDocument = {
-  kind: 'Document',
-  definitions: [
-    {
-      kind: 'OperationDefinition',
-      operation: 'mutation',
-      name: { kind: 'Name', value: 'AddProjectKnowledge' },
-      variableDefinitions: [
-        {
-          kind: 'VariableDefinition',
-          variable: {
-            kind: 'Variable',
-            name: { kind: 'Name', value: 'projectId' },
-          },
-          type: {
-            kind: 'NonNullType',
-            type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
-          },
-        },
-        {
-          kind: 'VariableDefinition',
-          variable: {
-            kind: 'Variable',
-            name: { kind: 'Name', value: 'fileIds' },
-          },
-          type: {
-            kind: 'NonNullType',
-            type: {
-              kind: 'ListType',
-              type: {
-                kind: 'NonNullType',
-                type: {
-                  kind: 'NamedType',
-                  name: { kind: 'Name', value: 'Int' },
-                },
-              },
-            },
-          },
-        },
-      ],
-      selectionSet: {
-        kind: 'SelectionSet',
-        selections: [
-          {
-            kind: 'Field',
-            name: { kind: 'Name', value: 'addProjectKnowledge' },
-            arguments: [
-              {
-                kind: 'Argument',
-                name: { kind: 'Name', value: 'projectId' },
-                value: {
-                  kind: 'Variable',
-                  name: { kind: 'Name', value: 'projectId' },
-                },
-              },
-              {
-                kind: 'Argument',
-                name: { kind: 'Name', value: 'fileIds' },
-                value: {
-                  kind: 'Variable',
-                  name: { kind: 'Name', value: 'fileIds' },
-                },
-              },
-            ],
-            selectionSet: {
-              kind: 'SelectionSet',
-              selections: [
-                { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
-                {
-                  kind: 'InlineFragment',
-                  typeCondition: {
-                    kind: 'NamedType',
-                    name: { kind: 'Name', value: 'Error' },
-                  },
-                  selectionSet: {
-                    kind: 'SelectionSet',
-                    selections: [
-                      {
-                        kind: 'Field',
-                        name: { kind: 'Name', value: 'message' },
-                      },
-                    ],
-                  },
-                },
-              ],
-            },
-          },
-        ],
-      },
-    },
-  ],
-} as unknown as DocumentNode<
-  AddProjectKnowledgeMutation,
-  AddProjectKnowledgeMutationVariables
->
 export const GetSettingsDocument = {
   kind: 'Document',
   definitions: [
@@ -1825,6 +1737,35 @@ export const DeleteMemoryDocument = {
   DeleteMemoryMutation,
   DeleteMemoryMutationVariables
 >
+export const TitleBarProjectsDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'query',
+      name: { kind: 'Name', value: 'TitleBarProjects' },
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'projects' },
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                { kind: 'Field', name: { kind: 'Name', value: 'id' } },
+                { kind: 'Field', name: { kind: 'Name', value: 'name' } },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<
+  TitleBarProjectsQuery,
+  TitleBarProjectsQueryVariables
+>
 export const CurrentUserDocument = {
   kind: 'Document',
   definitions: [
@@ -1919,6 +1860,101 @@ export const GetProjectDocument = {
     },
   ],
 } as unknown as DocumentNode<GetProjectQuery, GetProjectQueryVariables>
+export const AddProjectKnowledgeDocument = {
+  kind: 'Document',
+  definitions: [
+    {
+      kind: 'OperationDefinition',
+      operation: 'mutation',
+      name: { kind: 'Name', value: 'AddProjectKnowledge' },
+      variableDefinitions: [
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'projectId' },
+          },
+          type: {
+            kind: 'NonNullType',
+            type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
+          },
+        },
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'fileIds' },
+          },
+          type: {
+            kind: 'NonNullType',
+            type: {
+              kind: 'ListType',
+              type: {
+                kind: 'NonNullType',
+                type: {
+                  kind: 'NamedType',
+                  name: { kind: 'Name', value: 'Int' },
+                },
+              },
+            },
+          },
+        },
+      ],
+      selectionSet: {
+        kind: 'SelectionSet',
+        selections: [
+          {
+            kind: 'Field',
+            name: { kind: 'Name', value: 'addProjectKnowledge' },
+            arguments: [
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'projectId' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'projectId' },
+                },
+              },
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'fileIds' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'fileIds' },
+                },
+              },
+            ],
+            selectionSet: {
+              kind: 'SelectionSet',
+              selections: [
+                { kind: 'Field', name: { kind: 'Name', value: '__typename' } },
+                {
+                  kind: 'InlineFragment',
+                  typeCondition: {
+                    kind: 'NamedType',
+                    name: { kind: 'Name', value: 'Error' },
+                  },
+                  selectionSet: {
+                    kind: 'SelectionSet',
+                    selections: [
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'message' },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  ],
+} as unknown as DocumentNode<
+  AddProjectKnowledgeMutation,
+  AddProjectKnowledgeMutationVariables
+>
 export const DeleteKnowledgeFileDocument = {
   kind: 'Document',
   definitions: [

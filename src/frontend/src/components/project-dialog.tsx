@@ -133,6 +133,12 @@ export const ProjectDialog: FC<{
               id="project-instructions"
               value={instructions}
               onChange={e => instructionsSet(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault()
+                  void save()
+                }
+              }}
               placeholder="e.g. Always answer in bullet points; assume I know the basics."
               className="flex min-h-24 w-full rounded-md border border-neutral-200 bg-transparent px-3 py-2 text-sm shadow-sm transition-colors placeholder:text-neutral-500 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-950 dark:border-neutral-800 dark:placeholder:text-neutral-400 dark:focus-visible:ring-neutral-300"
             />

@@ -280,9 +280,12 @@ const ThreadRow: FC<{ thread: Thread; indent?: boolean }> = ({
   thread,
   indent = false,
 }) => {
+  const location = useLocation()
   const { currentThreadId } = useThreadContext()
   const { runningThreadIds, ...actions } = useThreadActions()
-  const active = currentThreadId === thread.id
+  const active =
+    currentThreadId === thread.id &&
+    (location.pathname === '/chat' || location.pathname === '/')
   const generating = runningThreadIds.has(thread.id)
   const [incognito, setIncognito] = useState(false)
   const [deleting, deletingSet] = useState(false)
@@ -375,6 +378,7 @@ const ThreadRow: FC<{ thread: Thread; indent?: boolean }> = ({
           <AlertDialogFooter>
             <AlertDialogCancel>No</AlertDialogCancel>
             <AlertDialogAction
+              className="bg-red-500 text-white hover:bg-red-600"
               onClick={() => {
                 deletingSet(false)
                 actions.remove(thread.id)

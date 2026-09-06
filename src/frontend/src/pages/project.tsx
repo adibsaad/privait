@@ -272,6 +272,16 @@ gql(/* GraphQL */ `
     }
   }
 
+  mutation AddProjectKnowledge($projectId: Int!, $fileIds: [Int!]!) {
+    addProjectKnowledge(projectId: $projectId, fileIds: $fileIds) {
+      __typename
+
+      ... on Error {
+        message
+      }
+    }
+  }
+
   mutation DeleteKnowledgeFile($fileId: Int!) {
     deleteFileUpload(fileId: $fileId) {
       __typename
