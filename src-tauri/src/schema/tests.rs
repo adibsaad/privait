@@ -513,7 +513,13 @@ pub(crate) mod chat_tests {
 
         let mut stream = schema.execute_stream(subscription_request(None, "hi"));
         let first = stream.next().await.unwrap();
-        let conversation_id = payload_item(first)["conversation"]["data"]["conversationId"]
+        let first_payload = payload_item(first);
+        assert_eq!(
+            first_payload["conversation"]["__typename"],
+            json!("SubscriptionConversationSuccess"),
+            "first item must be a streamed chunk, not an error (a provider transport error would make the stop test meaningless): {first_payload:?}"
+        );
+        let conversation_id = first_payload["conversation"]["data"]["conversationId"]
             .as_str()
             .unwrap()
             .parse::<i64>()
