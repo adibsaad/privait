@@ -1,10 +1,9 @@
 import { FC, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 
 import { gql } from '@apollo/client'
 import { useMutation, useQuery } from '@apollo/client/react'
 import {
-  ArrowLeftIcon,
   FileTextIcon,
   LoaderCircleIcon,
   PlusIcon,
@@ -34,7 +33,6 @@ const ATTACHMENT_ACCEPT =
 
 export const ProjectPage: FC = () => {
   const { projectId } = useParams()
-  const navigate = useNavigate()
   const { threadList } = useThreadContext()
   const actions = useThreadActions()
   const { sendMessageInProject } = actions
@@ -108,90 +106,86 @@ export const ProjectPage: FC = () => {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 overflow-y-auto p-6">
-      <div className="flex items-center gap-3">
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Back to chats"
-          onClick={() => navigate('/chat')}
-        >
-          <ArrowLeftIcon className="size-4" />
-        </Button>
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate text-lg font-semibold">
-            {project?.name ?? 'Project'}
-          </h1>
-          {project?.instructions ? (
-            <p className="text-muted-foreground text-xs">
-              {project.instructions}
-            </p>
-          ) : null}
+    <div className="mx-auto grid w-full max-w-5xl flex-1 grid-cols-[1fr_17rem] gap-8 overflow-y-auto p-6">
+      {/* Left column: header, composer, chats */}
+      <div className="flex min-w-0 flex-col gap-6">
+        <div className="flex items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <h1 className="truncate text-lg font-semibold">
+              {project?.name ?? 'Project'}
+            </h1>
+            {project?.instructions ? (
+              <p className="text-muted-foreground text-xs">
+                {project.instructions}
+              </p>
+            ) : null}
+          </div>
+          <Button variant="outline" onClick={() => editingSet(true)}>
+            Edit project
+          </Button>
         </div>
-        <Button variant="outline" onClick={() => editingSet(true)}>
-          Edit project
-        </Button>
+
+        {loading ? (
+          <div className="text-muted-foreground flex items-center gap-2 text-sm">
+            <LoaderCircleIcon className="size-4 animate-spin" /> Loading
+            project…
+          </div>
+        ) : (
+          <>
+            {/* Composer at the top: Enter starts a new chat in this project */}
+            <div className="rounded-xl border p-3 shadow-sm">
+              <textarea
+                value={draft}
+                onChange={e => draftSet(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault()
+                    startChat()
+                  }
+                }}
+                placeholder={`Start a new chat in ${project?.name ?? 'this project'}…`}
+                className="min-h-20 w-full resize-none bg-transparent text-sm outline-none placeholder:text-neutral-500"
+              />
+              <div className="flex justify-end">
+                <Button onClick={startChat} disabled={!draft.trim()}>
+                  Start chat
+                </Button>
+              </div>
+            </div>
+
+            {/* The project's chats */}
+            <div className="flex flex-col gap-2">
+              <h2 className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
+                Chats
+              </h2>
+              {chats.length === 0 ? (
+                <p className="text-muted-foreground text-sm">
+                  No chats yet — start one above.
+                </p>
+              ) : (
+                <ul className="flex flex-col gap-1">
+                  {chats.map(chat => (
+                    <li key={chat.id}>
+                      <button
+                        type="button"
+                        onClick={() => actions.switchTo(chat.id)}
+                        className="w-full rounded-lg px-3 py-2 text-start text-sm hover:bg-neutral-100 dark:hover:bg-neutral-800"
+                      >
+                        <span className="truncate">
+                          {chat.title || 'New Chat'}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </>
+        )}
       </div>
 
-      {loading ? (
-        <div className="text-muted-foreground flex items-center gap-2 text-sm">
-          <LoaderCircleIcon className="size-4 animate-spin" /> Loading project…
-        </div>
-      ) : (
-        <>
-          {/* Composer at the top: Enter starts a new chat in this project */}
-          <div className="rounded-xl border p-3 shadow-sm">
-            <textarea
-              value={draft}
-              onChange={e => draftSet(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault()
-                  startChat()
-                }
-              }}
-              placeholder={`Start a new chat in ${project?.name ?? 'this project'}…`}
-              className="min-h-20 w-full resize-none bg-transparent text-sm outline-none placeholder:text-neutral-500"
-            />
-            <div className="flex justify-end">
-              <Button onClick={startChat} disabled={!draft.trim()}>
-                Start chat
-              </Button>
-            </div>
-          </div>
-
-          {/* The project's chats */}
-          <div className="flex flex-col gap-2">
-            <h2 className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
-              Chats
-            </h2>
-            {chats.length === 0 ? (
-              <p className="text-muted-foreground text-sm">
-                No chats yet — start one above.
-              </p>
-            ) : (
-              <ul className="flex flex-col gap-1">
-                {chats.map(chat => (
-                  <li key={chat.id}>
-                    <button
-                      type="button"
-                      onClick={() => actions.switchTo(chat.id)}
-                      className="w-full rounded-lg px-3 py-2 text-start text-sm hover:bg-neutral-100 dark:hover:bg-neutral-800"
-                    >
-                      <span className="truncate">
-                        {chat.title || 'New Chat'}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </>
-      )}
-
-      {/* Knowledge panel on the right */}
-      <div className="flex flex-col gap-2">
+      {/* Right column: knowledge files */}
+      <div className="flex flex-col gap-2 border-l pl-6">
         <div className="flex items-center justify-between">
           <h2 className="text-muted-foreground text-xs font-medium uppercase tracking-wide">
             Knowledge

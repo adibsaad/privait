@@ -1,5 +1,5 @@
 import { FC, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 
 import { gql } from '@apollo/client'
 import { useMutation, useQuery } from '@apollo/client/react'
@@ -70,6 +70,7 @@ export const ThreadList: FC = () => {
     ReadonlySet<number>
   >(new Set())
   const navigate = useNavigate()
+  const location = useLocation()
 
   const projects = data?.projects ?? []
   const projectThreads = new Map<number, Thread[]>()
@@ -111,7 +112,10 @@ export const ThreadList: FC = () => {
         const collapsed = collapsedProjects.has(Number(project.id))
         return (
           <div key={project.id} className="flex flex-col gap-1">
-            <div className="group flex h-8 items-center gap-1 rounded-lg px-2 text-sm font-medium hover:bg-neutral-100 dark:hover:bg-neutral-800">
+            <div
+              data-active={location.pathname === `/project/${project.id}`}
+              className="group flex h-8 items-center gap-1 rounded-lg px-2 text-sm font-medium hover:bg-neutral-100 data-[active=true]:bg-neutral-100 dark:hover:bg-neutral-800 dark:data-[active=true]:bg-neutral-800"
+            >
               <button
                 type="button"
                 aria-label={collapsed ? 'Expand project' : 'Collapse project'}
@@ -281,6 +285,7 @@ const ThreadRow: FC<{ thread: Thread; indent?: boolean }> = ({
   const active = currentThreadId === thread.id
   const generating = runningThreadIds.has(thread.id)
   const [incognito, setIncognito] = useState(false)
+  const [deleting, deletingSet] = useState(false)
   const [setIncognitoState] = useMutation(SetConversationIncognitoDocument)
 
   const toggleIncognito = async () => {
@@ -344,12 +349,42 @@ const ThreadRow: FC<{ thread: Thread; indent?: boolean }> = ({
           </DropdownMenuItem>
           <DropdownMenuItem
             className="text-red-500"
-            onSelect={() => actions.remove(thread.id)}
+            onSelect={() => deletingSet(true)}
           >
             <TrashIcon className="size-4" /> Delete
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+      <AlertDialog
+        open={deleting}
+        onOpenChange={open => {
+          if (!open) {
+            deletingSet(false)
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete chat "{thread.title || 'New Chat'}"?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently removes the chat and its messages.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>No</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                deletingSet(false)
+                actions.remove(thread.id)
+              }}
+            >
+              Yes
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

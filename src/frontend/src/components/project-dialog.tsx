@@ -115,7 +115,14 @@ export const ProjectDialog: FC<{
               id="project-name"
               value={name}
               onChange={e => nameSet(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  void save()
+                }
+              }}
               placeholder="Thesis"
+              autoFocus
             />
           </div>
           <div className="flex flex-col gap-2">
