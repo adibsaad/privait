@@ -253,7 +253,7 @@ pub async fn distill_conversation(
     drop(conn);
 
     let request = ChatRequest {
-        model: String::new(),
+        model: provider.model().to_string(),
         messages: vec![
             ChatMessage {
                 role: ChatRole::System,
@@ -305,6 +305,7 @@ mod tests {
     use super::*;
 
     use axum::response::IntoResponse;
+    use axum::Json;
     use std::sync::Arc;
 
     use crate::embeddings::FakeEmbedder;
@@ -337,33 +338,43 @@ mod tests {
     }
 
     /// Real SSE mock over HTTP (the provider goes through reqwest), replying
-    /// with the configured text.
-    async fn spawn_memories_mock_provider(reply: &'static str) -> String {
+    /// with the configured text and capturing each request's `model` field.
+    async fn spawn_memories_mock_provider(
+        reply: &'static str,
+    ) -> (String, Arc<tokio::sync::Mutex<Vec<String>>>) {
         use bytes::Bytes;
 
-        let app = axum::Router::new().route(
-            "/v1/chat/completions",
-            axum::routing::post(move || async move {
-                let frames = vec![
-                    Bytes::from(format!(
-                        "data: {}\n\n",
-                        serde_json::json!({"choices":[{"delta":{"content": reply}}]})
-                    )),
-                    Bytes::from("data: [DONE]\n\n"),
-                ];
-                let body =
-                    futures_util::stream::iter(frames.into_iter().map(Ok::<_, std::io::Error>));
-                (
-                    [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
-                    axum::body::Body::from_stream(body),
-                )
-                    .into_response()
-            }),
-        );
+        let captured_models = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let app = {
+            let captured_models = captured_models.clone();
+            axum::Router::new().route(
+                "/v1/chat/completions",
+                axum::routing::post(move |Json(body): Json<serde_json::Value>| async move {
+                    captured_models
+                        .lock()
+                        .await
+                        .push(body["model"].as_str().unwrap_or_default().to_string());
+                    let frames = vec![
+                        Bytes::from(format!(
+                            "data: {}\n\n",
+                            serde_json::json!({"choices":[{"delta":{"content": reply}}]})
+                        )),
+                        Bytes::from("data: [DONE]\n\n"),
+                    ];
+                    let body =
+                        futures_util::stream::iter(frames.into_iter().map(Ok::<_, std::io::Error>));
+                    (
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        axum::body::Body::from_stream(body),
+                    )
+                        .into_response()
+                }),
+            )
+        };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        base_url
+        (base_url, captured_models)
     }
 
     fn seed_exchange(conn: &rusqlite::Connection, conversation_id: i64, incognito: bool) {
@@ -396,7 +407,7 @@ mod tests {
             seed_exchange(&conn, 3, false);
         }
 
-        let base_url = spawn_memories_mock_provider(
+        let (base_url, captured_models) = spawn_memories_mock_provider(
             "MEMORY: user reports March commute exhaustion\nMEMORY: wants help planning the month",
         )
         .await;
@@ -411,6 +422,11 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(written, 2);
+
+        // Regression: the distillation request must carry the provider's
+        // configured model — an empty model is rejected by real backends,
+        // which silently killed automatic memory writes.
+        assert_eq!(*captured_models.lock().await, vec!["mock".to_string()]);
 
         let conn = db.get().unwrap();
         let memories = list_memories(&conn).unwrap();
@@ -434,7 +450,8 @@ mod tests {
             seed_exchange(&conn, 4, true);
         }
 
-        let base_url = spawn_memories_mock_provider("MEMORY: should never be written").await;
+        let (base_url, _captured_models) =
+            spawn_memories_mock_provider("MEMORY: should never be written").await;
         let provider =
             OpenAiCompatProvider::from_settings(Some(base_url), None, Some("mock".to_string()))
                 .unwrap();
