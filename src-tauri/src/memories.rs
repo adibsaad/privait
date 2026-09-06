@@ -15,7 +15,8 @@ pub const DISTILL_SYSTEM_PROMPT: &str = "\
 You extract long-term memories from a chat exchange. Return at most two \
 memories: durable facts, preferences, or context worth remembering later \
 (never transient chatter). Reply with one memory per line, each prefixed \
-with `MEMORY: `. If nothing is worth remembering, reply with nothing else.";
+with `MEMORY: ` — for example `MEMORY: User is moving to Lisbon in October`. \
+If nothing is worth remembering, reply with `NONE` and nothing else.";
 
 const MAX_MEMORY_CHARS: usize = 500;
 const MAX_MEMORIES_PER_TURN: usize = 2;

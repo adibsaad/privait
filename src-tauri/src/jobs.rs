@@ -7,8 +7,11 @@
 //! post-chat memory distillation job.
 
 use std::path::Path;
+use std::time::Duration;
 
-use apalis::prelude::{TaskSink, WorkerBuilder, WorkerBuilderExt};
+use apalis::prelude::{
+    BackoffConfig, IntervalStrategy, StrategyBuilder, TaskSink, WorkerBuilder, WorkerBuilderExt,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePoolOptions;
 
@@ -59,8 +62,21 @@ impl Jobs {
         // apalis runs its own table migrations in `jobs.db`.
         apalis_sqlite::SqliteStorage::<(), (), ()>::setup(&pool).await?;
 
+        // Poll latency matters: a distillation job lands right after a chat
+        // turn, and the default strategy backs off to 60s while the queue
+        // is idle — memories would show up up to a minute late. 500ms base,
+        // capped at 2s when idle.
+        let config = apalis_sqlite::Config::new("privait-jobs").with_poll_interval(
+            StrategyBuilder::new()
+                .apply(
+                    IntervalStrategy::new(Duration::from_millis(500))
+                        .with_backoff(BackoffConfig::new(Duration::from_secs(2))),
+                )
+                .build(),
+        );
+
         Ok(Self {
-            storage: apalis_sqlite::SqliteStorage::new(&pool),
+            storage: apalis_sqlite::SqliteStorage::new_with_config(&pool, &config),
         })
     }
 
@@ -167,6 +183,52 @@ mod tests {
     use super::*;
 
     use tempfile::TempDir;
+
+    /// The poll backoff (idle queues back off to the 2s cap) must not delay
+    /// job pickup beyond ~3s — a distillation pushed minutes into a session
+    /// used to wait out a 60s default backoff.
+    #[tokio::test]
+    async fn jobs_process_promptly_after_an_idle_period() {
+        let dir = TempDir::new().unwrap();
+        let jobs = Jobs::init(&dir.path().join("jobs.db")).await.unwrap();
+
+        let processed = Arc::new(AtomicBool::new(false));
+        let flag = processed.clone();
+
+        let worker = WorkerBuilder::new("test-worker")
+            .backend(jobs.storage())
+            .concurrency(1)
+            .build(move |_job: AppJob| {
+                let flag = flag.clone();
+                async move {
+                    flag.store(true, Ordering::SeqCst);
+                }
+            })
+            .run();
+        tokio::spawn(worker);
+
+        // Let the worker idle well past the 2s backoff cap so the poll
+        // interval has escalated.
+        tokio::time::sleep(Duration::from_secs(3)).await;
+
+        let started = std::time::Instant::now();
+        jobs.push_job(AppJob::ProcessFile { file_id: 7 })
+            .await
+            .unwrap();
+
+        for _ in 0..60 {
+            if processed.load(Ordering::SeqCst) {
+                let latency = started.elapsed();
+                assert!(
+                    latency < Duration::from_secs(3),
+                    "job waited {latency:?} past the 2s backoff cap"
+                );
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("worker did not process the pushed job");
+    }
 
     #[tokio::test]
     async fn worker_processes_pushed_jobs() {
