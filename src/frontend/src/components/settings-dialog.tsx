@@ -255,7 +255,11 @@ function ProviderSection() {
  * Distilled memories carry the chat that produced them.
  */
 function MemoriesSection() {
-  const { data, loading } = useQuery(MemoriesDocument)
+  // network-only: worker-written memories bypass the Apollo cache, and
+  // cache-first would serve a stale (possibly empty) list forever.
+  const { data, loading } = useQuery(MemoriesDocument, {
+    fetchPolicy: 'network-only',
+  })
   const [createMemory] = useMutation(CreateMemoryDocument, {
     refetchQueries: [MemoriesDocument],
   })
