@@ -1,5 +1,5 @@
 import { useContext } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 
 import { gql } from '@apollo/client'
 import { useQuery } from '@apollo/client/react'
@@ -14,13 +14,29 @@ import { ProjectsDocument } from '@frontend/graphql/output/graphql'
 export function TitleBar() {
   const { currentThreadId, threadList } = useContext(ThreadContext)
   const navigate = useNavigate()
+  const location = useLocation()
   const { data } = useQuery(ProjectsDocument)
+
+  // Route-aware: a project page titles the strip with the project's name;
+  // the chat view shows "project / chat" for project chats.
+  const projectPageMatch = location.pathname.match(/^\/project\/(\d+)$/)
+  const projects = data?.projects ?? []
+  if (projectPageMatch) {
+    const pageProject = projects.find(p => p.id === projectPageMatch[1])
+    return (
+      <DragStrip className="flex h-10 shrink-0 items-center justify-center border-b">
+        <span className="text-muted-foreground pointer-events-none max-w-[60%] truncate text-sm">
+          {pageProject?.name ?? 'Project'}
+        </span>
+      </DragStrip>
+    )
+  }
 
   const thread = threadList.find(t => t.id === currentThreadId)
   const title = thread?.title?.trim()
   const project =
     thread?.projectId != null
-      ? data?.projects.find(p => Number(p.id) === thread.projectId)
+      ? projects.find(p => Number(p.id) === thread.projectId)
       : undefined
 
   return (

@@ -231,6 +231,7 @@ export const ThreadList: FC = () => {
           <AlertDialogFooter>
             <AlertDialogCancel>No</AlertDialogCancel>
             <AlertDialogAction
+              className="bg-red-500 text-neutral-50 hover:bg-red-600 dark:bg-red-900 dark:text-neutral-50 dark:hover:bg-red-900/90"
               onClick={async () => {
                 const target = deletingProject
                 if (!target) {
@@ -378,7 +379,7 @@ const ThreadRow: FC<{ thread: Thread; indent?: boolean }> = ({
           <AlertDialogFooter>
             <AlertDialogCancel>No</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-red-500 text-white hover:bg-red-600"
+              className="bg-red-500 text-neutral-50 hover:bg-red-600 dark:bg-red-900 dark:text-neutral-50 dark:hover:bg-red-900/90"
               onClick={() => {
                 deletingSet(false)
                 actions.remove(thread.id)
