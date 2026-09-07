@@ -1,3 +1,4 @@
+/* eslint-disable */
 import { TypedDocumentNode as DocumentNode } from '@graphql-typed-document-node/core'
 
 export type Maybe<T> = T | null
@@ -117,6 +118,8 @@ export type Message = {
   files: Array<FileUpload>
   id: Scalars['ID']['output']
   role: MessageRole
+  toolName?: Maybe<Scalars['String']['output']>
+  toolState?: Maybe<Scalars['String']['output']>
 }
 
 export enum MessageRole {
@@ -830,6 +833,8 @@ export type AllConversationsQuery = {
       id: string
       content: string
       role: MessageRole
+      toolName?: string | null
+      toolState?: string | null
       files: Array<{
         __typename?: 'FileUpload'
         id: string
@@ -854,6 +859,8 @@ export type GetConversationWithMessagesQuery = {
       id: string
       content: string
       role: MessageRole
+      toolName?: string | null
+      toolState?: string | null
       files: Array<{
         __typename?: 'FileUpload'
         id: string
@@ -2675,6 +2682,14 @@ export const AllConversationsDocument = {
                       { kind: 'Field', name: { kind: 'Name', value: 'role' } },
                       {
                         kind: 'Field',
+                        name: { kind: 'Name', value: 'toolName' },
+                      },
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'toolState' },
+                      },
+                      {
+                        kind: 'Field',
                         name: { kind: 'Name', value: 'files' },
                         selectionSet: {
                           kind: 'SelectionSet',
@@ -2754,6 +2769,14 @@ export const GetConversationWithMessagesDocument = {
                         name: { kind: 'Name', value: 'content' },
                       },
                       { kind: 'Field', name: { kind: 'Name', value: 'role' } },
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'toolName' },
+                      },
+                      {
+                        kind: 'Field',
+                        name: { kind: 'Name', value: 'toolState' },
+                      },
                       {
                         kind: 'Field',
                         name: { kind: 'Name', value: 'files' },

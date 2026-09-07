@@ -18,6 +18,8 @@ mod tests;
 #[cfg(test)]
 mod tests_support;
 
+#[cfg(test)]
+pub(crate) use chat::insert_tool_message;
 pub use chat::{
     ConversationMessageChunk, FirstChunkTimeout, GqlConversation, GqlMessage, MessageRole,
     Subscription,

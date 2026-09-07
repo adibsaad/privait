@@ -214,6 +214,41 @@ fn last_exchange(
     Ok(Some((user_content, assistant_content.clone())))
 }
 
+/// Settles the chat history's tool-call step after a distillation: DONE
+/// with a count when memories were written, deleted when the model proposed
+/// nothing (no noise for a no-op), ERROR when the distillation failed.
+pub fn finish_tool_message(
+    db: &Db,
+    tool_message_id: Option<i64>,
+    outcome: &Result<usize, String>,
+) -> Result<(), String> {
+    let Some(id) = tool_message_id else {
+        return Ok(());
+    };
+    let conn = db.get().map_err(|err| err.to_string())?;
+    match outcome {
+        Ok(0) => {
+            conn.execute("DELETE FROM messages WHERE id = ?1", [id])
+                .map_err(|err| err.to_string())?;
+        }
+        Ok(count) => {
+            conn.execute(
+                "UPDATE messages SET content = ?1, tool_state = 'DONE' WHERE id = ?2",
+                rusqlite::params![format!("Updated {count} memories"), id],
+            )
+            .map_err(|err| err.to_string())?;
+        }
+        Err(_) => {
+            conn.execute(
+                "UPDATE messages SET tool_state = 'ERROR', content = ?1 WHERE id = ?2",
+                rusqlite::params!["Couldn't update memories", id],
+            )
+            .map_err(|err| err.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 /// Extracts `MEMORY: `-prefixed lines from the provider's reply, bounded and
 /// cleaned. Nothing else in the reply is trusted.
 fn parse_memories(reply: &str) -> Vec<String> {
@@ -419,10 +454,30 @@ mod tests {
             vec![text.len() as f32; crate::db::EMBEDDING_DIM]
         }));
 
+        // The chat history's tool step: the pump inserts it RUNNING; the
+        // distillation settles it.
+        let conn = db.get().unwrap();
+        let tool_message_id =
+            crate::schema::insert_tool_message(&conn, 3, "update_memories", "RUNNING").unwrap();
+        drop(conn);
+
         let written = distill_conversation(&db, embedder.as_ref(), &provider, 3)
             .await
             .unwrap();
         assert_eq!(written, 2);
+
+        finish_tool_message(&db, Some(tool_message_id), &Ok(written)).unwrap();
+
+        let conn = db.get().unwrap();
+        let tool_row: (String, String) = conn
+            .query_row(
+                "SELECT tool_state, content FROM messages WHERE id = ?1",
+                [tool_message_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(tool_row.0, "DONE");
+        assert_eq!(tool_row.1, "Updated 2 memories");
 
         // Regression: the distillation request must carry the provider's
         // configured model — an empty model is rejected by real backends,

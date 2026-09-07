@@ -129,6 +129,9 @@ const EXPECTED_DIFF = [
   'type added: MutationUpdateMemoryResult',
   'type added: MutationUpdateMemorySuccess',
   'type added: SearchResult',
+  // 0026 typed chat history: tool-call steps on Message.
+  'Message: + toolName: String',
+  'Message: + toolState: String',
   // 0019 project pages: recency sorting + knowledge panel surface.
   'Conversation: + updatedAt: String!',
   // 0002 projects: the workspace container (see the projects row in

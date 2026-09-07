@@ -7,13 +7,10 @@ import { Loader } from 'lucide-react'
 
 import { EMPTY_THREAD_ID } from '@frontend/config/consts'
 import { ArchivedThread, Thread, ThreadContext } from '@frontend/context/thread'
-import {
-  AllConversationsDocument,
-  MessageRole,
-} from '@frontend/graphql/output/graphql'
+import { AllConversationsDocument } from '@frontend/graphql/output/graphql'
 import {
   pickInitialThreadId,
-  userAttachment,
+  toAuiMessageWithFiles,
 } from '@frontend/providers/chat-threads'
 
 gql(/* GraphQL */ `
@@ -30,6 +27,8 @@ gql(/* GraphQL */ `
         id
         content
         role
+        toolName
+        toolState
         files {
           id
           originalName
@@ -46,6 +45,8 @@ gql(/* GraphQL */ `
         id
         content
         role
+        toolName
+        toolState
         files {
           id
           originalName
@@ -54,43 +55,6 @@ gql(/* GraphQL */ `
     }
   }
 `)
-
-const graphqlRoleToAuiRole: Record<MessageRole, ThreadMessageLike['role']> = {
-  ASSISTANT: 'assistant',
-  SYSTEM: 'system',
-  USER: 'user',
-}
-
-function toAuiMessage(m: {
-  id: string
-  content: string
-  role: MessageRole
-}): ThreadMessageLike {
-  return {
-    id: m.id,
-    content: m.content,
-    role: graphqlRoleToAuiRole[m.role],
-  }
-}
-
-function toAuiMessageWithFiles(m: {
-  id: string
-  content: string
-  role: MessageRole
-}): ThreadMessageLike {
-  const message = toAuiMessage(m)
-  const files = (m as { files?: Array<{ id: string; originalName: string }> })
-    .files
-  if (files?.length) {
-    return {
-      ...message,
-      attachments: files.map(f =>
-        userAttachment({ id: f.id, name: f.originalName }),
-      ),
-    }
-  }
-  return message
-}
 
 export function ThreadProvider({ children }: { children: ReactNode }) {
   // Maps threadId -> messages

@@ -155,6 +155,11 @@ CREATE VIRTUAL TABLE memories USING vec0(
     // invisible to search. 'rebuild' re-reads the content table in one
     // step; idempotent and harmless on fresh installs.
     "INSERT INTO messages_fts(messages_fts) VALUES ('rebuild');",
+    // v7 — typed chat history: tool-call steps ride as SYSTEM-role rows
+    // with tool columns (no CHECK rebuild — additive only). NULL columns
+    // for ordinary user/assistant messages.
+    "ALTER TABLE messages ADD COLUMN tool_name TEXT;
+     ALTER TABLE messages ADD COLUMN tool_state TEXT CHECK (tool_state IN ('RUNNING', 'DONE', 'ERROR'));",
 ];
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {

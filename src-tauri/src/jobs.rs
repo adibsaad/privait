@@ -34,7 +34,10 @@ pub enum AppJob {
     ProcessFile { file_id: i64 },
     /// Post-chat memory distillation: proposes memories from the
     /// conversation's last exchange.
-    DistillMemory { conversation_id: i64 },
+    DistillMemory {
+        conversation_id: i64,
+        tool_message_id: Option<i64>,
+    },
 }
 
 type Storage_ = apalis_sqlite::SqliteStorage<
@@ -117,8 +120,13 @@ pub async fn run_worker(jobs: Jobs, deps: WorkerDeps) {
                             eprintln!("process-file failed for file {file_id}: {err}");
                         }
                     }
-                    AppJob::DistillMemory { conversation_id } => {
-                        if let Err(err) = run_distillation(&deps, conversation_id).await {
+                    AppJob::DistillMemory {
+                        conversation_id,
+                        tool_message_id,
+                    } => {
+                        if let Err(err) =
+                            run_distillation(&deps, conversation_id, tool_message_id).await
+                        {
                             eprintln!(
                                 "memory distillation failed for conversation {conversation_id}: {err}"
                             );
@@ -134,8 +142,14 @@ pub async fn run_worker(jobs: Jobs, deps: WorkerDeps) {
     }
 }
 
-/// Distills one conversation using the provider configured in settings.
-async fn run_distillation(deps: &WorkerDeps, conversation_id: i64) -> Result<(), String> {
+/// Distills one conversation using the provider configured in settings,
+/// then settles the history's tool-call step (RUNNING → DONE/ERROR; a run
+/// that proposes nothing removes the step entirely).
+async fn run_distillation(
+    deps: &WorkerDeps,
+    conversation_id: i64,
+    tool_message_id: Option<i64>,
+) -> Result<(), String> {
     let conn = deps.db.get().map_err(|err| err.to_string())?;
     if crate::memories::is_incognito(&conn, conversation_id) {
         return Ok(());
@@ -163,14 +177,15 @@ async fn run_distillation(deps: &WorkerDeps, conversation_id: i64) -> Result<(),
         },
     )
     .ok_or_else(|| "provider not configured".to_string())?;
-    crate::memories::distill_conversation(
+    let outcome = crate::memories::distill_conversation(
         &deps.db,
         deps.embedder.as_ref(),
         &provider,
         conversation_id,
     )
-    .await?;
-    Ok(())
+    .await;
+    crate::memories::finish_tool_message(&deps.db, tool_message_id, &outcome)?;
+    outcome.map(|_| ())
 }
 
 #[cfg(test)]

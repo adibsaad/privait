@@ -2,6 +2,7 @@ import { CompleteAttachment, ThreadMessageLike } from '@assistant-ui/react'
 
 import { EMPTY_THREAD_ID } from '@frontend/config/consts'
 import type { Thread } from '@frontend/context/thread'
+import type { MessageRole } from '@frontend/graphql/output/graphql'
 
 // Optimistic user messages get this id until the backend's persisted id
 // arrives with the first streamed chunk.
@@ -209,6 +210,75 @@ export function reconcileThreadList(
     { id: threadId, status: 'regular', title: '', projectId },
     ...withoutPending,
   ]
+}
+
+/** Maps a persisted message role to the runtime's role names. */
+const graphqlRoleToAuiRole: Record<MessageRole, ThreadMessageLike['role']> = {
+  ASSISTANT: 'assistant',
+  SYSTEM: 'system',
+  USER: 'user',
+}
+
+/** Persisted message → runtime message (no attachments). */
+export function toAuiMessage(m: {
+  id: string
+  content: string
+  role: MessageRole
+}): ThreadMessageLike {
+  return {
+    id: m.id,
+    content: m.content,
+    role: graphqlRoleToAuiRole[m.role],
+  }
+}
+
+/** Persisted message → runtime message, mapping tool-call steps to subtle
+ * system-level rows and carrying file chips on user messages. */
+export function toAuiMessageWithFiles(m: {
+  id: string
+  content: string
+  role: MessageRole
+  toolName?: string | null
+  toolState?: string | null
+}): ThreadMessageLike {
+  if (m.toolName) {
+    return {
+      id: m.id,
+      role: 'system',
+      content: [
+        {
+          type: 'text',
+          text: toolStepText(m.toolName, m.toolState, m.content),
+        },
+      ],
+    }
+  }
+  const message = toAuiMessage(m)
+  const files = (m as { files?: Array<{ id: string; originalName: string }> })
+    .files
+  if (files?.length) {
+    return {
+      ...message,
+      attachments: files.map(f =>
+        userAttachment({ id: f.id, name: f.originalName }),
+      ),
+    }
+  }
+  return message
+}
+
+/** Display text for a tool-call step row (role SYSTEM + tool columns). */
+export function toolStepText(
+  toolName: string,
+  toolState: string | null | undefined,
+  content: string,
+): string {
+  if (toolName === 'update_memories') {
+    if (toolState === 'RUNNING') return 'Updating user memories…'
+    if (toolState === 'ERROR') return content || "Couldn't update memories"
+    return content || 'Updated user memories'
+  }
+  return content
 }
 
 /** Minimal shape of a cached conversation row (apollo AllConversations). */

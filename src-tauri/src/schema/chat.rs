@@ -84,6 +84,10 @@ pub struct GqlMessage {
     pub id: ID,
     pub role: MessageRole,
     pub content: String,
+    /// Set on tool-call steps (role SYSTEM); identifies the action.
+    pub tool_name: Option<String>,
+    /// Tool-call lifecycle: RUNNING while executing, then DONE or ERROR.
+    pub tool_state: Option<String>,
 }
 
 #[Object(name = "Message")]
@@ -98,6 +102,16 @@ impl GqlMessage {
 
     async fn content(&self) -> &str {
         &self.content
+    }
+
+    #[graphql(name = "toolName")]
+    async fn tool_name(&self) -> Option<&str> {
+        self.tool_name.as_deref()
+    }
+
+    #[graphql(name = "toolState")]
+    async fn tool_state(&self) -> Option<&str> {
+        self.tool_state.as_deref()
     }
 
     /// Attachments carried by this message — lets chat history re-render
@@ -207,7 +221,7 @@ pub(crate) fn select_messages(
         });
 
     let mut stmt = conn.prepare(
-        "SELECT id, role, content FROM messages
+        "SELECT id, role, content, tool_name, tool_state FROM messages
          WHERE conversation_id = ?1 ORDER BY id ASC",
     )?;
     let rows = stmt
@@ -216,6 +230,8 @@ pub(crate) fn select_messages(
                 id: ID(row.get::<_, i64>(0)?.to_string()),
                 role: MessageRole::parse(&row.get::<_, String>(1)?),
                 content: row.get(2)?,
+                tool_name: row.get(3)?,
+                tool_state: row.get(4)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -232,6 +248,23 @@ fn insert_message(
         "INSERT INTO messages (conversation_id, role, content, created_at)
          VALUES (?1, ?2, ?3, ?4)",
         params![conversation_id, role, content, now_iso()],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Inserts a tool-call step row (role SYSTEM + tool columns): the chat
+/// history's record of a background action, e.g. the memory distillation.
+/// Returns the row id so the background job can update its state.
+pub fn insert_tool_message(
+    conn: &Connection,
+    conversation_id: i64,
+    tool_name: &str,
+    tool_state: &str,
+) -> rusqlite::Result<i64> {
+    conn.execute(
+        "INSERT INTO messages (conversation_id, role, content, tool_name, tool_state, created_at)
+         VALUES (?1, 'SYSTEM', '', ?2, ?3, ?4)",
+        params![conversation_id, tool_name, tool_state, now_iso()],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -453,8 +486,11 @@ impl Subscription {
             }
         };
 
+        // Tool rows are chat-history steps, not conversation turns — the
+        // provider never sees them.
         let mut request_messages: Vec<ChatMessage> = history
             .into_iter()
+            .filter(|m| m.tool_name.is_none())
             .map(|m| ChatMessage {
                 role: match m.role {
                     MessageRole::Assistant => ChatRole::Assistant,
@@ -512,6 +548,7 @@ impl Subscription {
 
         let (tx, rx) = tokio::sync::mpsc::channel::<SubscriptionConversationResult>(64);
         let chunk_db = db.clone();
+        let incognito = crate::memories::is_incognito(&conn, conversation_id);
         // Exists in the real app (lib.rs); None in test schemas without a
         // queue — background distillation is skipped there.
         let chat_jobs = ctx
@@ -700,6 +737,7 @@ impl Subscription {
             // placeholder instead of leaving a ghost bubble).
             let content = accumulated;
             let produced_reply = !content.is_empty();
+            let mut tool_message_id: Option<i64> = None;
             if let Ok(conn) = chunk_db.get() {
                 if stopped && content.is_empty() {
                     let _ =
@@ -709,6 +747,19 @@ impl Subscription {
                         "UPDATE messages SET content = ?1 WHERE id = ?2",
                         params![content, assistant_message_id],
                     );
+
+                    // The distillation becomes a visible step in the chat
+                    // history: insert the RUNNING row now so the UI's
+                    // post-done refetch picks it up with the reply.
+                    if !failed && produced_reply && !incognito && chat_jobs.is_some() {
+                        tool_message_id = insert_tool_message(
+                            &conn,
+                            conversation_id,
+                            "update_memories",
+                            "RUNNING",
+                        )
+                        .ok();
+                    }
                 }
             }
 
@@ -718,7 +769,10 @@ impl Subscription {
             if !failed && produced_reply {
                 if let Some(jobs) = chat_jobs {
                     if let Err(err) = jobs
-                        .push_job(crate::jobs::AppJob::DistillMemory { conversation_id })
+                        .push_job(crate::jobs::AppJob::DistillMemory {
+                            conversation_id,
+                            tool_message_id,
+                        })
                         .await
                     {
                         eprintln!(

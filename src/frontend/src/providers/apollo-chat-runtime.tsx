@@ -26,6 +26,7 @@ import {
   ConversationSubDocument,
   DeleteConversationDocument,
   GetConversationDocument,
+  GetConversationWithMessagesDocument,
   RenameConversationDocument,
   StopRunDocument,
   UploadFileDocument,
@@ -36,6 +37,7 @@ import {
   dropNewThreadBucket,
   reconcileFirstChunk,
   reconcileThreadList,
+  toAuiMessageWithFiles,
   userMessage,
   withOptimisticThread,
   withOptimisticUserMessage,
@@ -336,6 +338,48 @@ export function ApolloChatRuntimeProvider({
       syncRunningThreadIds()
     }
 
+    // The distillation step is written to history around the done chunk:
+    // the RUNNING row lands with the reply, then the worker flips it to
+    // DONE/ERROR a few seconds later. Re-fetch the conversation at both
+    // moments so the step appears and settles without a reload. The merge
+    // keeps optimistic rows the user typed since the fetch snapshot.
+    const refetchForToolStep = (attempts: number) => {
+      if (attempts <= 0 || threadId == null) {
+        return
+      }
+      const threadIdAtFetch: string = threadId
+      window.setTimeout(
+        () => {
+          apolloClient
+            .query({
+              query: GetConversationWithMessagesDocument,
+              variables: { id: Number(threadIdAtFetch) },
+              fetchPolicy: 'network-only',
+            })
+            .then(result => {
+              const conversation = result.data?.conversation
+              if (!conversation) {
+                return
+              }
+              setThreads(prev => {
+                const existing = prev.get(threadIdAtFetch) ?? []
+                const optimistic = existing.filter(m => m.id === 'temp-user')
+                const serverMessages = conversation.messages.map(
+                  toAuiMessageWithFiles,
+                )
+                return new Map(prev).set(threadIdAtFetch, [
+                  ...serverMessages,
+                  ...optimistic,
+                ])
+              })
+              refetchForToolStep(attempts - 1)
+            })
+            .catch(() => {})
+        },
+        attempts === 2 ? 2000 : 7000,
+      )
+    }
+
     const handleData = (data: unknown) => {
       const conversation = (
         data as {
@@ -363,6 +407,9 @@ export function ApolloChatRuntimeProvider({
 
       if (conversation?.data?.done) {
         finalize()
+        // Reconcile the tool-call step (memory distillation) if one is
+        // expected for this turn.
+        refetchForToolStep(2)
         return
       }
 
