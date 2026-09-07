@@ -191,6 +191,10 @@ where
     tokio::spawn(async move {
         let mut byte_stream = byte_stream;
         let mut decoder = SseDecoder::default();
+        // Providers disagree on the reasoning field's name; the stream's
+        // observed delta fields (names only — metadata, never content)
+        // make mismatches diagnosable from the engine log.
+        let mut delta_fields: std::collections::BTreeSet<String> = Default::default();
 
         'outer: loop {
             match byte_stream.next().await {
@@ -200,6 +204,20 @@ where
                         let data = event.trim_start_matches(' ').trim_end_matches('\r');
                         if data == "[DONE]" {
                             break 'outer;
+                        }
+
+                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(data) {
+                            if let Some(delta) = value
+                                .get("choices")
+                                .and_then(|choices| choices.get(0))
+                                .and_then(|choice| choice.get("delta"))
+                            {
+                                if let Some(map) = delta.as_object() {
+                                    for key in map.keys() {
+                                        delta_fields.insert(key.clone());
+                                    }
+                                }
+                            }
                         }
 
                         match parse_chat_delta(data) {
@@ -223,6 +241,10 @@ where
                 None => break,
             }
         }
+
+        if !delta_fields.is_empty() {
+            eprintln!("provider delta fields: {delta_fields:?}");
+        }
     });
 
     tokio_stream::wrappers::ReceiverStream::new(rx)
@@ -232,7 +254,9 @@ where
 /// liveness: content deltas carry text, reasoning deltas (thinking models —
 /// they can stream long before any text) and bare preambles surface as
 /// `Reasoning` so the chat pump's first-chunk timeout measures the
-/// provider's responsiveness, not its verbosity.
+/// provider's responsiveness, not its verbosity. Reasoning text rides the
+/// `reasoning_content` (DeepSeek/GLM-official) or `reasoning`
+/// (OpenRouter-style) field — providers disagree on the name.
 fn parse_chat_delta(data: &str) -> Result<Option<MessageDelta>, String> {
     let value: serde_json::Value =
         serde_json::from_str(data).map_err(|err| format!("invalid SSE payload: {err}"))?;
@@ -244,10 +268,11 @@ fn parse_chat_delta(data: &str) -> Result<Option<MessageDelta>, String> {
 
     Ok(match delta {
         Some(delta) => {
-            if let Some(reasoning) = delta
+            let reasoning = delta
                 .get("reasoning_content")
                 .and_then(|content| content.as_str())
-            {
+                .or_else(|| delta.get("reasoning").and_then(|content| content.as_str()));
+            if let Some(reasoning) = reasoning {
                 Some(MessageDelta::Reasoning(reasoning.to_string()))
             } else {
                 match delta.get("content") {
@@ -376,6 +401,20 @@ mod tests {
             reasoning, 2,
             "reasoning deltas surface as Reasoning pieces; usage frames yield nothing"
         );
+    }
+
+    #[tokio::test]
+    async fn openrouter_style_reasoning_field_also_counts() {
+        let payload = concat!(
+            "data: {\"choices\":[{\"delta\":{\"reasoning\":\"thinking (openrouter style)\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+
+        let (collected, reasoning) = collect(stream_from_strings(vec![Ok(payload.into())])).await;
+
+        assert_eq!(collected, "ok");
+        assert_eq!(reasoning, 1, "the `reasoning` field is just as alive");
     }
 
     #[tokio::test]
