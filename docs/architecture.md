@@ -4,8 +4,9 @@ This document describes how Privait works: what the moving pieces are, how
 data flows through them, and why key decisions were made. It is written to
 be understood without reading the code.
 
-For the mission and principles see [vision.md](vision.md); for where the
-product is heading see [roadmap.md](roadmap.md).
+For the shared vocabulary see [glossary.md](glossary.md); for the mission
+and principles see [vision.md](vision.md); for where the product is heading
+see [roadmap.md](roadmap.md).
 
 ## The big picture
 
@@ -171,7 +172,7 @@ One SQLite file (`privait.db`) holds everything structured:
 | `messages`      | each message in each thread                                  |
 | `files`         | attachment metadata, linked to the message that carried them |
 | `file_chunks`   | passages cut from files, with their vectors                  |
-| `memories`      | distilled long-term facts, with vectors                      |
+| `memories`      | distilled long-term facts (vectors in `memories_vec`)        |
 | `settings`      | provider configuration (base URL, API key, model)            |
 
 Vectors live in the same file via the sqlite-vec extension. There are no
