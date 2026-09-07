@@ -3,6 +3,7 @@ type Conversation {
 	title: String!
 	archived: Boolean!
 	projectId: Int
+	incognito: Boolean!
 	updatedAt: String!
 	messages: [Message!]!
 }
@@ -317,6 +318,9 @@ type Subscription {
 	Starts (or continues) a chat turn. `conversationId` omitted creates a
 	conversation; the new user message and an empty assistant message are
 	persisted up front, then provider chunks stream over this subscription.
+	`incognito` applies only to that creation: the chat is born without
+	memory reads/writes and stays out of transcript search (see the
+	distillation skip for how the flag is enforced per turn).
 	
 	`fileIds` are uploads sent with this turn (the composer uploads them
 	right before subscribing). They are attached to the user message here;
@@ -332,7 +336,7 @@ type Subscription {
 	the run registry — which also aborts when no chunk is flowing. Either
 	way the partial reply is persisted.
 	"""
-	conversation(conversationId: Int, message: String!, fileIds: [Int!], projectId: Int): SubscriptionConversationResult!
+	conversation(conversationId: Int, message: String!, fileIds: [Int!], projectId: Int, incognito: Boolean): SubscriptionConversationResult!
 }
 
 union SubscriptionConversationResult = Error | SubscriptionConversationSuccess

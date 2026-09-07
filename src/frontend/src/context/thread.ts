@@ -10,6 +10,9 @@ export type Thread = {
   status: 'regular'
   /** Project this chat belongs to (null = plain chat). */
   projectId?: number | null
+  /** No memory reads/writes, no transcript search. Drives the sidebar
+   * badge; must come from the persisted flag, not local guesses. */
+  incognito?: boolean
   /** Last activity, for recency sorting in the sidebar. */
   updatedAt?: string
 }
@@ -31,6 +34,10 @@ export const ThreadContext = createContext<{
   setThreads: React.Dispatch<
     React.SetStateAction<Map<string, ThreadMessageLike[]>>
   >
+  /** Composer toggle for starting the next chat incognito (new chats
+   * only — the ⋯ menu flips existing ones). Reset on send. */
+  newChatIncognito: boolean
+  setNewChatIncognito: (value: boolean) => void
 }>({
   currentThreadId: EMPTY_THREAD_ID,
   setCurrentThreadId: () => {},
@@ -40,6 +47,8 @@ export const ThreadContext = createContext<{
   setArchivedThreadList: () => {},
   threads: new Map(),
   setThreads: () => {},
+  newChatIncognito: false,
+  setNewChatIncognito: () => {},
 })
 
 // Hook for accessing thread context

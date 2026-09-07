@@ -18,6 +18,7 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   CopyIcon,
+  EyeOffIcon,
   LoaderCircleIcon,
   SquareIcon,
 } from 'lucide-react'
@@ -31,6 +32,7 @@ import { MarkdownText } from '@frontend/components/assistant-ui/markdown-text'
 import { ToolFallback } from '@frontend/components/assistant-ui/tool-fallback'
 import { TooltipIconButton } from '@frontend/components/assistant-ui/tooltip-icon-button'
 import { Button } from '@frontend/components/ui/button'
+import { useThreadContext } from '@frontend/context/thread'
 import { cn } from '@frontend/lib/utils'
 
 export const Thread: FC = () => {
@@ -149,10 +151,41 @@ const Composer: FC = () => {
   )
 }
 
+/** Incognito birth for a brand-new chat: shown on the empty view only —
+ * existing chats flip the flag from the thread menu. The first turn reads
+ * and writes no memories, and the chat stays out of transcript search. */
+const NewChatIncognitoToggle: FC = () => {
+  const { newChatIncognito, setNewChatIncognito } = useThreadContext()
+  return (
+    <AuiIf condition={s => s.thread.isEmpty}>
+      <TooltipIconButton
+        tooltip="Incognito — no memories, no history search"
+        side="bottom"
+        type="button"
+        variant="ghost"
+        size="icon"
+        className={cn(
+          'size-8 rounded-full',
+          newChatIncognito &&
+            'bg-neutral-900 text-white dark:bg-white dark:text-neutral-950',
+        )}
+        aria-pressed={newChatIncognito}
+        aria-label="Start this chat incognito"
+        onClick={() => setNewChatIncognito(!newChatIncognito)}
+      >
+        <EyeOffIcon className="size-4" />
+      </TooltipIconButton>
+    </AuiIf>
+  )
+}
+
 const ComposerAction: FC = () => {
   return (
     <div className="aui-composer-action-wrapper relative mx-2 mb-2 flex items-center justify-between">
-      <ComposerAddAttachment />
+      <div className="flex items-center gap-1">
+        <ComposerAddAttachment />
+        <NewChatIncognitoToggle />
+      </div>
       <div className="flex items-center gap-1">
         <AuiIf condition={s => !s.thread.isRunning}>
           <ComposerPrimitive.Send asChild>

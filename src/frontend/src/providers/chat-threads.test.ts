@@ -172,6 +172,7 @@ describe('withOptimisticThread', () => {
       id: EMPTY_THREAD_ID,
       status: 'regular' as const,
       title: '',
+      incognito: false,
     })
     expect(next[1]).toEqual({
       id: '7',
@@ -184,6 +185,12 @@ describe('withOptimisticThread', () => {
     const seeded = withOptimisticThread([])
 
     expect(withOptimisticThread(seeded)).toBe(seeded)
+  })
+
+  it('marks a chat born incognito so the badge shows immediately', () => {
+    const next = withOptimisticThread([], null, true)
+
+    expect(next[0].incognito).toBe(true)
   })
 })
 
@@ -219,6 +226,22 @@ describe('reconcileThreadList', () => {
 
     expect(next[0].id).toBe('9')
     expect(next).toHaveLength(2)
+  })
+
+  it('carries the incognito birth onto the real conversation', () => {
+    const list: Thread[] = [
+      {
+        id: EMPTY_THREAD_ID,
+        status: 'regular' as const,
+        title: '',
+        incognito: true,
+      },
+      { id: '7', status: 'regular' as const, title: 'old' },
+    ]
+
+    const next = reconcileThreadList(list, '9')
+
+    expect(next[0]).toMatchObject({ id: '9', incognito: true })
   })
 })
 

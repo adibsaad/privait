@@ -65,6 +65,25 @@ pub(crate) mod chat_tests {
     }
 
     #[tokio::test]
+    async fn insert_conversation_persists_the_incognito_flag() {
+        let db = test_db();
+        let conn = db.get().unwrap();
+        let private = insert_conversation(&conn, "private", None, true).unwrap();
+        let public = insert_conversation(&conn, "public", None, false).unwrap();
+
+        let flags: Vec<(i64, i64)> = conn
+            .prepare("SELECT id, incognito FROM conversations WHERE id IN (?1, ?2) ORDER BY id")
+            .unwrap()
+            .query_map(rusqlite::params![private, public], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(flags, vec![(private, 1), (public, 0)]);
+    }
+
+    #[tokio::test]
     async fn subscription_streams_chunks_and_persists_messages() {
         let db = test_db();
         {
@@ -2341,6 +2360,32 @@ pub(crate) mod mutation_tests {
         assert_eq!(
             serde_json::to_value(&response.data).unwrap()["setConversationIncognito"],
             json!(true)
+        );
+
+        // The persisted flag round-trips to the sidebar: the badge and the
+        // ⋯ menu state read this field, so it must survive restarts.
+        let response = schema
+            .execute("{ conversations { id incognito } }")
+            .await
+            .into_result()
+            .unwrap();
+        let conversations = serde_json::to_value(&response.data).unwrap()["conversations"]
+            .as_array()
+            .unwrap()
+            .clone();
+        let incognito_by_id: Vec<(i64, bool)> = conversations
+            .iter()
+            .map(|c| {
+                (
+                    c["id"].as_str().unwrap().parse::<i64>().unwrap(),
+                    c["incognito"].as_bool().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            incognito_by_id,
+            vec![(9, true), (10, false)],
+            "incognito flag reaches the Conversation query"
         );
 
         // Memory reads skip incognito chats entirely.

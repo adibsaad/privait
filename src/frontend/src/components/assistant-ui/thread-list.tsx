@@ -2,7 +2,7 @@ import { FC, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import { gql } from '@apollo/client'
-import { useMutation, useQuery } from '@apollo/client/react'
+import { useApolloClient, useMutation, useQuery } from '@apollo/client/react'
 import { AuiIf, ThreadListPrimitive } from '@assistant-ui/react'
 import {
   ArchiveIcon,
@@ -42,6 +42,7 @@ import {
   SetConversationIncognitoDocument,
 } from '@frontend/graphql/output/graphql'
 import { useThreadActions } from '@frontend/providers/apollo-chat-runtime'
+import { applyConversationCacheUpdate } from '@frontend/providers/chat-threads'
 
 /**
  * Sidebar thread list, grouped by project. Plain chats live under "Chats";
@@ -284,11 +285,12 @@ const ThreadRow: FC<{ thread: Thread; indent?: boolean }> = ({
   const location = useLocation()
   const { currentThreadId } = useThreadContext()
   const { runningThreadIds, ...actions } = useThreadActions()
+  const apolloClient = useApolloClient()
   const active =
     currentThreadId === thread.id &&
     (location.pathname === '/chat' || location.pathname === '/')
   const generating = runningThreadIds.has(thread.id)
-  const [incognito, setIncognito] = useState(false)
+  const [incognito, setIncognito] = useState(thread.incognito ?? false)
   const [deleting, deletingSet] = useState(false)
   const [setIncognitoState] = useMutation(SetConversationIncognitoDocument)
 
@@ -299,6 +301,24 @@ const ThreadRow: FC<{ thread: Thread; indent?: boolean }> = ({
       await setIncognitoState({
         variables: { conversationId: Number(thread.id), incognito: next },
       })
+      // Keep the cache truthful: the row remounts on project switches and
+      // app restarts re-seed from AllConversations, so local state alone
+      // goes stale (and could strand the chat in incognito).
+      const cached = apolloClient.readQuery({
+        query: AllConversationsDocument,
+      })
+      if (cached?.conversations) {
+        apolloClient.writeQuery({
+          query: AllConversationsDocument,
+          data: {
+            conversations: applyConversationCacheUpdate(
+              cached.conversations,
+              thread.id,
+              { incognito: next },
+            ),
+          },
+        })
+      }
       toast(
         next
           ? 'Incognito on — this chat reads and writes no memories'

@@ -4,6 +4,7 @@ import { useParams } from 'react-router-dom'
 import { gql } from '@apollo/client'
 import { useMutation, useQuery } from '@apollo/client/react'
 import {
+  EyeOffIcon,
   FileTextIcon,
   LoaderCircleIcon,
   PlusIcon,
@@ -11,6 +12,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 
+import { TooltipIconButton } from '@frontend/components/assistant-ui/tooltip-icon-button'
 import { ProjectDialog } from '@frontend/components/project-dialog'
 import { Button } from '@frontend/components/ui/button'
 import { useThreadContext } from '@frontend/context/thread'
@@ -46,6 +48,7 @@ export const ProjectPage: FC = () => {
     refetchQueries: [GetProjectDocument],
   })
   const [draft, draftSet] = useState('')
+  const [incognito, incognitoSet] = useState(false)
   const [editing, editingSet] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [claiming, claimingSet] = useState(false)
@@ -62,7 +65,8 @@ export const ProjectPage: FC = () => {
       return
     }
     draftSet('')
-    sendMessageInProject(Number(project.id), text)
+    incognitoSet(false)
+    sendMessageInProject(Number(project.id), text, incognito)
   }
 
   const addKnowledge = async (fileList: FileList | null) => {
@@ -146,7 +150,24 @@ export const ProjectPage: FC = () => {
                 placeholder={`Start a new chat in ${project?.name ?? 'this project'}…`}
                 className="min-h-20 w-full resize-none bg-transparent text-sm outline-none placeholder:text-neutral-500"
               />
-              <div className="flex justify-end">
+              <div className="flex items-center justify-end gap-2">
+                <TooltipIconButton
+                  tooltip="Incognito — no memories, no history search"
+                  side="bottom"
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className={
+                    incognito
+                      ? 'size-8 rounded-full bg-neutral-900 text-white dark:bg-white dark:text-neutral-950'
+                      : 'size-8 rounded-full text-neutral-500'
+                  }
+                  aria-pressed={incognito}
+                  aria-label="Start this chat incognito"
+                  onClick={() => incognitoSet(!incognito)}
+                >
+                  <EyeOffIcon className="size-4" />
+                </TooltipIconButton>
                 <Button onClick={startChat} disabled={!draft.trim()}>
                   Start chat
                 </Button>

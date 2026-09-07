@@ -50,12 +50,14 @@ gql(/* GraphQL */ `
     $message: String!
     $fileIds: [Int!]
     $projectId: Int
+    $incognito: Boolean
   ) {
     conversation(
       conversationId: $conversationId
       message: $message
       fileIds: $fileIds
       projectId: $projectId
+      incognito: $incognito
     ) {
       __typename
 
@@ -151,8 +153,13 @@ export type ThreadActions = {
   switchTo: (threadId: string) => void
   switchToNew: () => void
   /** Starts a brand-new chat inside the project with the given first
-   * message (the project page's composer) and lands the user in it. */
-  sendMessageInProject: (projectId: number, text: string) => void
+   * message (the project page's composer) and lands the user in it.
+   * `incognito` births the chat without memory read/write. */
+  sendMessageInProject: (
+    projectId: number,
+    text: string,
+    incognito?: boolean,
+  ) => void
   rename: (threadId: string, title: string) => void
   archive: (threadId: string) => void
   remove: (threadId: string) => void
@@ -284,6 +291,8 @@ export function ApolloChatRuntimeProvider({
     setArchivedThreadList,
     threads,
     setThreads,
+    newChatIncognito,
+    setNewChatIncognito,
   } = useThreadContext()
 
   // Stream callbacks read the selection fresh (subscription callbacks can
@@ -323,6 +332,9 @@ export function ApolloChatRuntimeProvider({
     message: string
     fileIds: number[] | null
     projectId: number | null
+    /** Marks a chat born incognito (creation only — the backend ignores it
+     * when continuing an existing conversation). */
+    incognito: boolean
     optimisticThreadId: string
     attachments: UserAttachment[]
   }) => void = opts => {
@@ -481,6 +493,7 @@ export function ApolloChatRuntimeProvider({
           message: opts.message,
           fileIds: opts.fileIds,
           projectId: opts.projectId,
+          incognito: opts.incognito,
         },
       })
       .subscribe({
@@ -509,6 +522,7 @@ export function ApolloChatRuntimeProvider({
     onSwitchToNewThread: () => {
       // Drop any optimistic messages left in the "new thread" bucket.
       setThreads(prev => dropNewThreadBucket(prev))
+      setNewChatIncognito(false)
       setCurrentThreadId(EMPTY_THREAD_ID)
       navigate('/chat')
     },
@@ -666,7 +680,7 @@ export function ApolloChatRuntimeProvider({
     // Brand-new chats also appear in the sidebar immediately, selected
     // with a fallback title, and get their real id on the first chunk.
     if (currentThreadId === EMPTY_THREAD_ID) {
-      setThreadList(prev => withOptimisticThread(prev))
+      setThreadList(prev => withOptimisticThread(prev, null, newChatIncognito))
     }
 
     // One live stream per send: parallel sends run concurrently (the
@@ -676,9 +690,13 @@ export function ApolloChatRuntimeProvider({
       message: text,
       fileIds,
       projectId: null,
+      incognito: currentThreadId === EMPTY_THREAD_ID && newChatIncognito,
       optimisticThreadId: currentThreadId,
       attachments,
     })
+    // The flag was consumed: this chat is (or is becoming) incognito, and
+    // the next chat starts non-incognito again.
+    setNewChatIncognito(false)
   }
 
   const threadActions: ThreadActions = {
@@ -689,21 +707,23 @@ export function ApolloChatRuntimeProvider({
     },
     switchToNew: () => {
       setThreads(prev => dropNewThreadBucket(prev))
+      setNewChatIncognito(false)
       setCurrentThreadId(EMPTY_THREAD_ID)
       navigate('/chat')
     },
-    sendMessageInProject: (projectId, text) => {
+    sendMessageInProject: (projectId, text, incognito = false) => {
       // The project page's composer: identical optimistic flow to a
       // new-chat send, scoped to the project. The first chunk reconciles
       // the optimistic EMPTY bucket into the real conversation (keeping
       // the project group) and lands the user in the chat.
-      setThreadList(prev => withOptimisticThread(prev, projectId))
+      setThreadList(prev => withOptimisticThread(prev, projectId, incognito))
       setThreads(prev => withOptimisticUserMessage(prev, EMPTY_THREAD_ID, text))
       startStream({
         conversationId: null,
         message: text,
         fileIds: null,
         projectId,
+        incognito,
         optimisticThreadId: EMPTY_THREAD_ID,
         attachments: [],
       })

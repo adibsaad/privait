@@ -1,4 +1,3 @@
-/* eslint-disable */
 import { TypedDocumentNode as DocumentNode } from '@graphql-typed-document-node/core'
 
 export type Maybe<T> = T | null
@@ -36,6 +35,7 @@ export type Conversation = {
   __typename?: 'Conversation'
   archived: Scalars['Boolean']['output']
   id: Scalars['ID']['output']
+  incognito: Scalars['Boolean']['output']
   messages: Array<Message>
   projectId?: Maybe<Scalars['Int']['output']>
   title: Scalars['String']['output']
@@ -458,6 +458,9 @@ export type Subscription = {
    * Starts (or continues) a chat turn. `conversationId` omitted creates a
    * conversation; the new user message and an empty assistant message are
    * persisted up front, then provider chunks stream over this subscription.
+   * `incognito` applies only to that creation: the chat is born without
+   * memory reads/writes and stays out of transcript search (see the
+   * distillation skip for how the flag is enforced per turn).
    *
    * `fileIds` are uploads sent with this turn (the composer uploads them
    * right before subscribing). They are attached to the user message here;
@@ -479,6 +482,7 @@ export type Subscription = {
 export type SubscriptionConversationArgs = {
   conversationId?: InputMaybe<Scalars['Int']['input']>
   fileIds?: InputMaybe<Array<Scalars['Int']['input']>>
+  incognito?: InputMaybe<Scalars['Boolean']['input']>
   message: Scalars['String']['input']
   projectId?: InputMaybe<Scalars['Int']['input']>
 }
@@ -725,6 +729,7 @@ export type ConversationSubSubscriptionVariables = Exact<{
   message: Scalars['String']['input']
   fileIds?: InputMaybe<Array<Scalars['Int']['input']> | Scalars['Int']['input']>
   projectId?: InputMaybe<Scalars['Int']['input']>
+  incognito?: InputMaybe<Scalars['Boolean']['input']>
 }>
 
 export type ConversationSubSubscription = {
@@ -827,6 +832,7 @@ export type AllConversationsQuery = {
     title: string
     archived: boolean
     projectId?: number | null
+    incognito: boolean
     updatedAt: string
     messages: Array<{
       __typename: 'Message'
@@ -2081,6 +2087,14 @@ export const ConversationSubDocument = {
           },
           type: { kind: 'NamedType', name: { kind: 'Name', value: 'Int' } },
         },
+        {
+          kind: 'VariableDefinition',
+          variable: {
+            kind: 'Variable',
+            name: { kind: 'Name', value: 'incognito' },
+          },
+          type: { kind: 'NamedType', name: { kind: 'Name', value: 'Boolean' } },
+        },
       ],
       selectionSet: {
         kind: 'SelectionSet',
@@ -2119,6 +2133,14 @@ export const ConversationSubDocument = {
                 value: {
                   kind: 'Variable',
                   name: { kind: 'Name', value: 'projectId' },
+                },
+              },
+              {
+                kind: 'Argument',
+                name: { kind: 'Name', value: 'incognito' },
+                value: {
+                  kind: 'Variable',
+                  name: { kind: 'Name', value: 'incognito' },
                 },
               },
             ],
@@ -2663,6 +2685,7 @@ export const AllConversationsDocument = {
                 { kind: 'Field', name: { kind: 'Name', value: 'title' } },
                 { kind: 'Field', name: { kind: 'Name', value: 'archived' } },
                 { kind: 'Field', name: { kind: 'Name', value: 'projectId' } },
+                { kind: 'Field', name: { kind: 'Name', value: 'incognito' } },
                 { kind: 'Field', name: { kind: 'Name', value: 'updatedAt' } },
                 {
                   kind: 'Field',

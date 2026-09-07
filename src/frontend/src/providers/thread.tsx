@@ -21,6 +21,7 @@ gql(/* GraphQL */ `
       title
       archived
       projectId
+      incognito
       updatedAt
       messages {
         __typename
@@ -66,6 +67,7 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
     new Map(),
   )
   const [currentThreadId, setCurrentThreadId] = useState(EMPTY_THREAD_ID)
+  const [newChatIncognito, setNewChatIncognito] = useState(false)
   const { data, loading } = useQuery(AllConversationsDocument)
 
   useEffect(() => {
@@ -90,6 +92,7 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
           status: 'regular' as const,
           title: c.title,
           projectId: c.projectId ?? null,
+          incognito: c.incognito,
           updatedAt: c.updatedAt,
         })),
     )
@@ -122,6 +125,8 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
         setArchivedThreadList,
         threads,
         setThreads,
+        newChatIncognito,
+        setNewChatIncognito,
       }}
     >
       {children}
