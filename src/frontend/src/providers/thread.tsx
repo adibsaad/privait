@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useState } from 'react'
+import { ReactNode, useEffect, useRef, useState } from 'react'
 
 import { gql } from '@apollo/client'
 import { useQuery } from '@apollo/client/react'
@@ -69,6 +69,11 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
   const [currentThreadId, setCurrentThreadId] = useState(EMPTY_THREAD_ID)
   const [newChatIncognito, setNewChatIncognito] = useState(false)
   const { data, loading } = useQuery(AllConversationsDocument)
+  // The boot selection runs exactly once: this effect re-runs on every
+  // AllConversations cache emission (the settle-poll's message writes, the
+  // post-send title fetch), and re-picking the first thread would yank the
+  // user out of their selected chat mid-conversation.
+  const bootstrappedRef = useRef(false)
 
   useEffect(() => {
     if (loading || !data?.conversations?.length) {
@@ -106,8 +111,11 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
         })),
     )
     // Never restore the app into an archived chat: pick the first live one,
-    // or start on the new-chat page.
-    setCurrentThreadId(pickInitialThreadId(data.conversations))
+    // or start on the new-chat page — once, at boot.
+    if (!bootstrappedRef.current) {
+      bootstrappedRef.current = true
+      setCurrentThreadId(pickInitialThreadId(data.conversations))
+    }
   }, [loading, data])
 
   if (loading) {

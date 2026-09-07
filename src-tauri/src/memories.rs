@@ -15,12 +15,16 @@ pub const DISTILL_SYSTEM_PROMPT: &str = "\
 You maintain the user's long-term memories from a chat exchange: durable \
 facts, preferences, or context worth remembering later (never transient \
 chatter). You may also reconcile the current memories listed alongside the \
-exchange. Reply with one action per line and nothing else:
+exchange — if the exchange contradicts, supersedes, or restates one, rewrite \
+or remove it instead of adding a duplicate. Reply with one action per line \
+and nothing else:
 - `MEMORY: <fact>` — remember a new fact (at most two)
 - `UPDATE <id>: <rewritten fact>` — a listed memory is outdated; rewrite it
 - `DELETE <id>` — a listed memory is superseded; remove it
-`UPDATE`/`DELETE` apply only to memories offered with a #id. If nothing is \
-worth remembering or changing, reply with `NONE` and nothing else.";
+`UPDATE`/`DELETE` apply only to memories offered with a #id. For example, if \
+a listed memory reads `#7 User's name is John` and the user says their name \
+is now Mike, reply `UPDATE 7: User's name is Mike`. If nothing is worth \
+remembering or changing, reply with `NONE` and nothing else.";
 
 const MAX_MEMORY_CHARS: usize = 500;
 const MAX_ADDS_PER_TURN: usize = 2;
@@ -34,12 +38,16 @@ const MAX_MUTATIONS_PER_TURN: usize = 4;
 const RECONCILE_OFFER_LIMIT: usize = 24;
 
 /// What one distillation pass did to the store — rendered into the chat's
-/// tool step so every automatic change is visible in the thread.
+/// tool step so every automatic change is visible in the thread. `ignored`
+/// counts proposals dropped by validation (malformed lines, foreign ids,
+/// user-authored memories) — never surfaced in the UI, but logged so
+/// protocol drift is diagnosable without reading user content.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct DistillOutcome {
     pub added: usize,
     pub updated: usize,
     pub deleted: usize,
+    pub ignored: usize,
 }
 
 impl DistillOutcome {
@@ -316,9 +324,11 @@ fn parse_memory_proposals(reply: &str) -> Vec<MemoryProposal> {
             false => trimmed.to_string(),
         }
     }
-    /// `UPDATE 12: new content` → id 12 + content (also used for bare ids).
+    /// `UPDATE 12: new content` (or `UPDATE #12: …`) → id 12 + content
+    /// (also used for bare ids, e.g. `DELETE #12`). The model echoes the
+    /// offer list's `#id` prefix, so both forms parse.
     fn parse_id(rest: &str) -> Option<(i64, Option<&str>)> {
-        let rest = rest.trim();
+        let rest = rest.trim().trim_start_matches('#').trim_start();
         let (id_part, tail) = match rest.split_once(':') {
             Some((id_part, tail)) => (id_part, Some(tail)),
             None => (rest, None),
@@ -457,34 +467,47 @@ pub async fn distill_conversation(
 
     let mut outcome = DistillOutcome::default();
     for proposal in proposals {
-        match proposal {
-            MemoryProposal::Add(content) => {
-                if write_memory(
-                    db,
-                    embedder,
-                    &content,
-                    MemorySource::Distilled,
-                    Some(conversation_id),
-                )
-                .await
-                .is_ok()
-                {
-                    outcome.added += 1;
-                }
-            }
+        let kind = match &proposal {
+            MemoryProposal::Add(_) => "add",
+            MemoryProposal::Update { .. } => "update",
+            MemoryProposal::Delete { .. } => "delete",
+        };
+        let result = match &proposal {
+            MemoryProposal::Add(content) => write_memory(
+                db,
+                embedder,
+                content,
+                MemorySource::Distilled,
+                Some(conversation_id),
+            )
+            .await
+            .map(|_| ()),
             MemoryProposal::Update { memory_id, content } => {
-                if mutable_ids.contains(&memory_id)
-                    && update_memory(db, embedder, memory_id, &content)
-                        .await
-                        .is_ok()
-                {
-                    outcome.updated += 1;
+                if !mutable_ids.contains(memory_id) {
+                    Err("memory not offered or user-authored".to_string())
+                } else {
+                    update_memory(db, embedder, *memory_id, content).await
                 }
             }
             MemoryProposal::Delete { memory_id } => {
-                if mutable_ids.contains(&memory_id) && delete_memory(db, memory_id).await.is_ok() {
-                    outcome.deleted += 1;
+                if !mutable_ids.contains(memory_id) {
+                    Err("memory not offered or user-authored".to_string())
+                } else {
+                    delete_memory(db, *memory_id).await
                 }
+            }
+        };
+        match result {
+            Ok(()) => match &proposal {
+                MemoryProposal::Add(_) => outcome.added += 1,
+                MemoryProposal::Update { .. } => outcome.updated += 1,
+                MemoryProposal::Delete { .. } => outcome.deleted += 1,
+            },
+            Err(err) => {
+                // Metadata only (privacy: never log memory content) — the
+                // kind + error make dropped proposals diagnosable.
+                eprintln!("distillation proposal ignored ({kind}): {err}");
+                outcome.ignored += 1;
             }
         }
     }
@@ -533,7 +556,8 @@ mod tests {
     fn parse_proposals_mutations() {
         let reply = "UPDATE 12: user lives in SF\nDELETE 12\nDELETE broken\n\
                      UPDATE not-an-id: x\nUPDATE 7\nDELETE 13: with content\n\
-                     MEMORY: user works at Acme\nDELETE 14";
+                     MEMORY: user works at Acme\nDELETE 14\n\
+                     UPDATE #15: hashed update\nDELETE #16";
         let parsed = parse_memory_proposals(reply);
         assert_eq!(
             parsed,
@@ -545,6 +569,12 @@ mod tests {
                 MemoryProposal::Delete { memory_id: 12 },
                 MemoryProposal::Add("user works at Acme".to_string()),
                 MemoryProposal::Delete { memory_id: 14 },
+                // The offer list shows ids as `#3` — models echo that prefix.
+                MemoryProposal::Update {
+                    memory_id: 15,
+                    content: "hashed update".to_string()
+                },
+                MemoryProposal::Delete { memory_id: 16 },
             ],
             "malformed lines are dropped: non-numeric ids, UPDATE without content, \
              DELETE with content"
@@ -587,7 +617,8 @@ mod tests {
             DistillOutcome {
                 added: 1,
                 updated: 1,
-                deleted: 1
+                deleted: 1,
+                ..Default::default()
             }
             .step_text(),
             "Updated 2 memories · 1 memory removed"
@@ -708,7 +739,9 @@ mod tests {
             outcome,
             DistillOutcome {
                 added: 2,
-                ..Default::default()
+                updated: 0,
+                deleted: 0,
+                ignored: 0,
             }
         );
 
@@ -844,9 +877,11 @@ mod tests {
             DistillOutcome {
                 added: 1,
                 updated: 1,
-                deleted: 1
+                deleted: 1,
+                ignored: 2,
             },
-            "forged ids and the manual memory are ignored"
+            "forged ids and the manual memory are ignored (parse-dropped \
+             lines never become proposals)"
         );
 
         let conn = db.get().unwrap();

@@ -35,3 +35,9 @@
   STRING content ("" while the reply is still empty). `textOf` must handle
   both shapes or the next chunk crashes on `content[0]` of "" (caught live:
   TypeError 'in' operator). Encode both shapes in tests.
+- Present ids in the exact grammar the parser accepts, or accept both forms:
+  the distill offer list showed `#3` while UPDATE/DELETE parsed bare `3` —
+  models echo the prefix they're shown, so `UPDATE #3:` was silently dropped
+  (live no-op). Same trap for test mocks: a prompt's worked example (`#7`)
+  leaked into a mock's id scan and produced a misleading "ignored" — scope
+  test-mock parsing to the actual payload section it should read.
