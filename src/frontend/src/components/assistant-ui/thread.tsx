@@ -61,9 +61,12 @@ export const Thread: FC = () => {
           }}
         />
 
+        {/* Inline in the history flow, in the tool-step style: the last row
+         * while the model reasons, before any reply text exists. */}
+        <ThinkingIndicator />
+
         <ThreadPrimitive.ViewportFooter className="aui-thread-viewport-footer max-w-(--thread-max-width) sticky bottom-0 mx-auto mt-auto flex w-full flex-col gap-4 overflow-visible rounded-t-3xl bg-white pb-4 md:pb-6 dark:bg-neutral-950">
           <ThreadScrollToBottom />
-          <ThinkingIndicator />
           <Composer />
         </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>
