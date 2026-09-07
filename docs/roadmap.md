@@ -10,7 +10,7 @@ The Tauri desktop migration described below is **done**: React frontend + Rust c
 
 Privait is growing from "journal with grounded chat" into a **full private workspace** — projects, agentic tools, artifacts, one global memory — with journaling as the memory layer. Feature depth targets the best desktop AI workspaces; the differentiator stays privacy: local-first, inspectable, permissioned.
 
-The build order is tracked on the kanban board (tasks `0001`–`0011`); the phases they implement, in order:
+The build order is tracked on the kanban board (see `docs/project/tasks/`); the phases they implement, in order:
 
 1. **Safety & structure** — run registry (concurrency), schema modularization, dead-code hygiene
 2. **Organize** — projects: container, instructions, knowledge, project-scoped grounding
@@ -24,7 +24,7 @@ The build order is tracked on the kanban board (tasks `0001`–`0011`); the phas
 - **Core:** Rust backend, TypeScript frontend, in a Tauri shell. No Node sidecar.
 - **Editor:** a rich Markdown editor (CodeMirror-based), not a plain textarea.
 - **Scope:** full workspace — projects + tools + artifacts + journal-as-memory. Journal lands after the workspace foundations; it feeds the memory rather than being the product's cage.
-- **Memory:** one global store; per-turn top-k across everything with a threshold; explicit `search_history` tool for transcript lookup (project-scoped default); incognito excludes from read, write, and search.
+- **Memory:** one global store; per-turn top-k across everything with a threshold; explicit `search_history` tool for transcript lookup (project-scoped default); incognito excludes from read, write, and search. Distillation reconciles, not appends (0029): the distiller sees the recent store and may rewrite or remove superseded `distilled` memories — user-authored memories are only changed by the user.
 - **Agency:** tool calls with per-tool per-chat allow/ask/deny, deny-by-default outside granted folders, non-blocking concurrent runs. First set: read_file, search_files, search_history, write_file, remember. Shell/computer-use deferred.
 - **Thinking/reasoning:** OpenAI-compat providers first (reasoning fields + `` fallback), then llama.cpp; one provider-normalized ReasoningTrace. No Anthropic-protocol specifics.
 - **Web search:** user-configured backend, query-string-only egress, default ask, global kill switch (task 0009).
