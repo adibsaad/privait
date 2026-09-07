@@ -18,3 +18,9 @@
 - NEVER run `saveSettings` (or any write mutation) against the real app-data dir via serve_dev — settings is a full three-field replace, so placeholder values WIPE user data (this blanked the user's API key during PR #7 verification, unrecoverable). Verification boots MUST use `PRIVAIT_DATA_DIR=$(mktemp -d)` (0014); inspecting real settings is read-only, and secrets are never read or printed.
 - CI gates (ci.yml): `cargo fmt --all --check` and `cargo clippy --all-targets -- -D warnings` — clippy runs with warnings DENIED, so locally run the exact CI command (plain clippy hides unused-imports/unused-vars as warnings; both bit PR #7).
 - Docs/markdown-only commits: append `[skip ci]` to the commit message — nothing compiled, so CI has nothing to check and the rust job is pure wait. (GitHub Actions honors `[skip ci]`/`[ci skip]` in the subject or body.) Example: `docs: fix typo [skip ci]`.
+- Provider liveness ≠ content: thinking models (GLM, deepseek-r1, o-series on
+  OpenAI-compat endpoints) stream `reasoning_content`/role deltas long before
+  any text, and keep-alives are non-`data:` lines. The chat pump's
+  first-chunk timeout must treat any SSE delta frame as liveness (provider.rs
+  yields empty heartbeat chunks) — gating on content deltas made every GLM
+  chat time out at 30s while the provider was streaming fine.

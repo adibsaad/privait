@@ -215,19 +215,31 @@ where
     tokio_stream::wrappers::ReceiverStream::new(rx)
 }
 
-/// Extracts `choices[0].delta.content` from one `data:` payload. Returns
-/// `Ok(None)` for keep-alives/role frames with no content.
+/// Extracts `choices[0].delta.content` from one `data:` payload. Frames
+/// with a delta but no content (role preambles, reasoning deltas — thinking
+/// models can stream these long before any text) surface as empty chunks:
+/// they count as liveness, so the chat pump's first-chunk timeout measures
+/// the provider's responsiveness, not its verbosity.
 fn parse_chat_delta(data: &str) -> Result<Option<String>, String> {
     let value: serde_json::Value =
         serde_json::from_str(data).map_err(|err| format!("invalid SSE payload: {err}"))?;
 
-    Ok(value
+    let delta = value
         .get("choices")
         .and_then(|choices| choices.get(0))
-        .and_then(|choice| choice.get("delta"))
-        .and_then(|delta| delta.get("content"))
-        .and_then(|content| content.as_str())
-        .map(|chunk| chunk.to_string()))
+        .and_then(|choice| choice.get("delta"));
+
+    Ok(match delta {
+        // A delta carrying text — the normal path (empty content included:
+        // OpenAI-style streams open with `{"content": ""}`).
+        Some(delta) => match delta.get("content") {
+            Some(content) => content.as_str().map(|chunk| chunk.to_string()),
+            // Reasoning deltas and role-only preambles: live, but silent.
+            None => Some(String::new()),
+        },
+        // No delta at all (e.g. usage-only final frames): nothing happened.
+        None => None,
+    })
 }
 
 /// Incremental `data:`-line SSE decoder. Feed raw text, get complete event
@@ -310,6 +322,34 @@ mod tests {
         let error = stream.next().await.unwrap().unwrap_err();
 
         assert!(matches!(error, ProviderError::Stream(_)));
+    }
+
+    #[tokio::test]
+    async fn reasoning_frames_count_as_liveness_without_rendering() {
+        let payload = concat!(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"pondering\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\" more\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n",
+            "data: {\"choices\":[]}\n\n",
+            "data: [DONE]\n\n",
+        );
+
+        let mut stream = stream_from_strings(vec![Ok(payload.into())]);
+        let mut collected = String::new();
+        let mut heartbeats = 0;
+        while let Some(item) = stream.next().await {
+            let chunk = item.unwrap();
+            if chunk.is_empty() {
+                heartbeats += 1;
+            }
+            collected.push_str(&chunk);
+        }
+
+        assert_eq!(collected, "answer");
+        assert_eq!(
+            heartbeats, 2,
+            "reasoning deltas yield empty liveness chunks; usage frames yield nothing"
+        );
     }
 
     #[tokio::test]
