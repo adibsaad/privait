@@ -232,9 +232,10 @@ pub fn finish_tool_message(
                 .map_err(|err| err.to_string())?;
         }
         Ok(count) => {
+            let noun = if *count == 1 { "memory" } else { "memories" };
             conn.execute(
                 "UPDATE messages SET content = ?1, tool_state = 'DONE' WHERE id = ?2",
-                rusqlite::params![format!("Updated {count} memories"), id],
+                rusqlite::params![format!("Updated {count} {noun}"), id],
             )
             .map_err(|err| err.to_string())?;
         }

@@ -1,7 +1,6 @@
 import { Outlet } from 'react-router-dom'
 
 import { AppSidebar } from '../components/app-sidebar'
-import { MemoriesWatcher } from '../components/memories-watcher'
 import { TitleBar } from '../components/titlebar'
 import {
   SidebarInset,
@@ -15,7 +14,6 @@ export function Root() {
   return (
     <ThreadProvider>
       <ApolloChatRuntimeProvider>
-        <MemoriesWatcher />
         <SidebarProvider>
           <AppSidebar />
           <SidebarInset>
