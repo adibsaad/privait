@@ -3,26 +3,45 @@
 //! (sqlx/apalis); the content DB stays rusqlite.
 //!
 //! The file pipeline moved to `files.rs` (the chat-composer path processes
-//! uploads inline); the worker stays wired for the Reflect phase's
-//! scheduled jobs but nothing pushes to it today.
+//! uploads inline; the queue still carries fallback jobs). 0003 adds the
+//! post-chat memory distillation job.
 
 use std::path::Path;
+use std::time::Duration;
 
-use apalis::prelude::{TaskSink, WorkerBuilder, WorkerBuilderExt};
+use apalis::prelude::{
+    BackoffConfig, IntervalStrategy, StrategyBuilder, TaskSink, WorkerBuilder, WorkerBuilderExt,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePoolOptions;
 
 pub use crate::files::PipelineDeps;
 
+/// What the distillation worker needs beyond the queue: content db, file
+/// storage, and the local embedder.
+#[derive(Clone)]
+pub struct WorkerDeps {
+    pub db: crate::db::Db,
+    pub storage: std::sync::Arc<crate::storage::Storage>,
+    pub embedder: std::sync::Arc<dyn crate::embeddings::Embedder>,
+}
+
 /// All apalis usage is routed through this module so version churn can't leak
 /// into resolvers (see docs/architecture.md decisions).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProcessFileJob {
-    pub file_id: i64,
+pub enum AppJob {
+    /// Fallback path for the inline upload pipeline.
+    ProcessFile { file_id: i64 },
+    /// Post-chat memory distillation: proposes memories from the
+    /// conversation's last exchange.
+    DistillMemory {
+        conversation_id: i64,
+        tool_message_id: Option<i64>,
+    },
 }
 
 type Storage_ = apalis_sqlite::SqliteStorage<
-    ProcessFileJob,
+    AppJob,
     apalis_codec::json::JsonCodec<apalis_sqlite::CompactType>,
     apalis_sqlite::fetcher::SqliteFetcher,
 >;
@@ -46,15 +65,28 @@ impl Jobs {
         // apalis runs its own table migrations in `jobs.db`.
         apalis_sqlite::SqliteStorage::<(), (), ()>::setup(&pool).await?;
 
+        // Poll latency matters: a distillation job lands right after a chat
+        // turn, and the default strategy backs off to 60s while the queue
+        // is idle — memories would show up up to a minute late. 500ms base,
+        // capped at 2s when idle.
+        let config = apalis_sqlite::Config::new("privait-jobs").with_poll_interval(
+            StrategyBuilder::new()
+                .apply(
+                    IntervalStrategy::new(Duration::from_millis(500))
+                        .with_backoff(BackoffConfig::new(Duration::from_secs(2))),
+                )
+                .build(),
+        );
+
         Ok(Self {
-            storage: apalis_sqlite::SqliteStorage::new(&pool),
+            storage: apalis_sqlite::SqliteStorage::new_with_config(&pool, &config),
         })
     }
 
     /// Enqueues a job.
     pub async fn push_job(
         &self,
-        job: ProcessFileJob,
+        job: AppJob,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let mut storage = self.storage.clone();
         storage.push(job).await?;
@@ -66,24 +98,94 @@ impl Jobs {
     }
 }
 
-/// Runs the file-processing worker; blocks until the task is cancelled.
-pub async fn run_worker(jobs: Jobs, deps: PipelineDeps) {
-    if let Err(err) = WorkerBuilder::new("process-file")
+/// Runs the background worker (file fallback + memory distillation); blocks
+/// until the task is cancelled.
+pub async fn run_worker(jobs: Jobs, deps: WorkerDeps) {
+    if let Err(err) = WorkerBuilder::new("background-worker")
         .backend(jobs.storage())
         .concurrency(1)
-        .build(move |job: ProcessFileJob| {
+        .build(move |job: AppJob| {
             let deps = deps.clone();
             async move {
-                if let Err(err) = crate::files::process_uploaded_file(&deps, job.file_id).await {
-                    eprintln!("process-file failed for file {}: {err}", job.file_id);
+                match job {
+                    AppJob::ProcessFile { file_id } => {
+                        let pipeline = PipelineDeps {
+                            db: deps.db.clone(),
+                            storage: deps.storage.clone(),
+                            embedder: deps.embedder.clone(),
+                        };
+                        if let Err(err) =
+                            crate::files::process_uploaded_file(&pipeline, file_id).await
+                        {
+                            eprintln!("process-file failed for file {file_id}: {err}");
+                        }
+                    }
+                    AppJob::DistillMemory {
+                        conversation_id,
+                        tool_message_id,
+                    } => {
+                        if let Err(err) =
+                            run_distillation(&deps, conversation_id, tool_message_id).await
+                        {
+                            eprintln!(
+                                "memory distillation failed for conversation {conversation_id}: {err}"
+                            );
+                        }
+                    }
                 }
             }
         })
         .run()
         .await
     {
-        eprintln!("process-file worker stopped: {err}");
+        eprintln!("background worker stopped: {err}");
     }
+}
+
+/// Distills one conversation using the provider configured in settings,
+/// then settles the history's tool-call step (RUNNING → DONE/ERROR; a run
+/// that proposes nothing removes the step entirely).
+async fn run_distillation(
+    deps: &WorkerDeps,
+    conversation_id: i64,
+    tool_message_id: Option<i64>,
+) -> Result<(), String> {
+    let conn = deps.db.get().map_err(|err| err.to_string())?;
+    if crate::memories::is_incognito(&conn, conversation_id) {
+        return Ok(());
+    }
+    // Re-binding: the connection must not be held across awaits (rusqlite
+    // is !Sync), and the provider is built fresh from settings.
+    drop(conn);
+    let provider = crate::provider::OpenAiCompatProvider::from_settings(
+        {
+            let conn = deps.db.get().map_err(|err| err.to_string())?;
+            (
+                crate::db::get_setting(&conn, "provider.baseUrl").unwrap_or_default(),
+                crate::db::get_setting(&conn, "provider.apiKey").unwrap_or_default(),
+                crate::db::get_setting(&conn, "provider.model").unwrap_or_default(),
+            )
+        }
+        .0,
+        {
+            let conn = deps.db.get().map_err(|err| err.to_string())?;
+            crate::db::get_setting(&conn, "provider.apiKey").unwrap_or_default()
+        },
+        {
+            let conn = deps.db.get().map_err(|err| err.to_string())?;
+            crate::db::get_setting(&conn, "provider.model").unwrap_or_default()
+        },
+    )
+    .ok_or_else(|| "provider not configured".to_string())?;
+    let outcome = crate::memories::distill_conversation(
+        &deps.db,
+        deps.embedder.as_ref(),
+        &provider,
+        conversation_id,
+    )
+    .await;
+    crate::memories::finish_tool_message(&deps.db, tool_message_id, &outcome)?;
+    outcome.map(|_| ())
 }
 
 #[cfg(test)]
@@ -97,6 +199,52 @@ mod tests {
 
     use tempfile::TempDir;
 
+    /// The poll backoff (idle queues back off to the 2s cap) must not delay
+    /// job pickup beyond ~3s — a distillation pushed minutes into a session
+    /// used to wait out a 60s default backoff.
+    #[tokio::test]
+    async fn jobs_process_promptly_after_an_idle_period() {
+        let dir = TempDir::new().unwrap();
+        let jobs = Jobs::init(&dir.path().join("jobs.db")).await.unwrap();
+
+        let processed = Arc::new(AtomicBool::new(false));
+        let flag = processed.clone();
+
+        let worker = WorkerBuilder::new("test-worker")
+            .backend(jobs.storage())
+            .concurrency(1)
+            .build(move |_job: AppJob| {
+                let flag = flag.clone();
+                async move {
+                    flag.store(true, Ordering::SeqCst);
+                }
+            })
+            .run();
+        tokio::spawn(worker);
+
+        // Let the worker idle well past the 2s backoff cap so the poll
+        // interval has escalated.
+        tokio::time::sleep(Duration::from_secs(3)).await;
+
+        let started = std::time::Instant::now();
+        jobs.push_job(AppJob::ProcessFile { file_id: 7 })
+            .await
+            .unwrap();
+
+        for _ in 0..60 {
+            if processed.load(Ordering::SeqCst) {
+                let latency = started.elapsed();
+                assert!(
+                    latency < Duration::from_secs(3),
+                    "job waited {latency:?} past the 2s backoff cap"
+                );
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("worker did not process the pushed job");
+    }
+
     #[tokio::test]
     async fn worker_processes_pushed_jobs() {
         let dir = TempDir::new().unwrap();
@@ -108,7 +256,7 @@ mod tests {
         let worker = WorkerBuilder::new("test-worker")
             .backend(jobs.storage())
             .concurrency(1)
-            .build(move |_job: ProcessFileJob| {
+            .build(move |_job: AppJob| {
                 let flag = flag.clone();
                 async move {
                     flag.store(true, Ordering::SeqCst);
@@ -117,7 +265,9 @@ mod tests {
             .run();
         tokio::spawn(worker);
 
-        jobs.push_job(ProcessFileJob { file_id: 42 }).await.unwrap();
+        jobs.push_job(AppJob::ProcessFile { file_id: 42 })
+            .await
+            .unwrap();
 
         for _ in 0..50 {
             if processed.load(Ordering::SeqCst) {
@@ -159,20 +309,25 @@ mod tests {
         let worker = WorkerBuilder::new("test-worker")
             .backend(jobs.storage())
             .concurrency(1)
-            .build(move |job: ProcessFileJob| {
-                let deps = PipelineDeps {
-                    db: worker_db.clone(),
-                    storage: worker_storage.clone(),
-                    embedder: worker_embedder.clone(),
-                };
+            .build(move |job: AppJob| {
+                let worker_db = worker_db.clone();
+                let worker_storage = worker_storage.clone();
+                let worker_embedder = worker_embedder.clone();
                 async move {
-                    let _ = crate::files::process_uploaded_file(&deps, job.file_id).await;
+                    if let AppJob::ProcessFile { file_id } = job {
+                        let deps = PipelineDeps {
+                            db: worker_db,
+                            storage: worker_storage,
+                            embedder: worker_embedder,
+                        };
+                        let _ = crate::files::process_uploaded_file(&deps, file_id).await;
+                    }
                 }
             })
             .run();
         tokio::spawn(worker);
 
-        jobs.push_job(ProcessFileJob { file_id: row.id })
+        jobs.push_job(AppJob::ProcessFile { file_id: row.id })
             .await
             .unwrap();
 

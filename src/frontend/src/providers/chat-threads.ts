@@ -2,6 +2,7 @@ import { CompleteAttachment, ThreadMessageLike } from '@assistant-ui/react'
 
 import { EMPTY_THREAD_ID } from '@frontend/config/consts'
 import type { Thread } from '@frontend/context/thread'
+import type { MessageRole } from '@frontend/graphql/output/graphql'
 
 // Optimistic user messages get this id until the backend's persisted id
 // arrives with the first streamed chunk.
@@ -171,18 +172,26 @@ export function dropNewThreadBucket(threads: ThreadsMap): ThreadsMap {
 /**
  * Optimistically shows the in-progress new chat in the sidebar (selected,
  * fallback title) the moment the first message is sent — before the backend
- * has created the conversation.
+ * has created the conversation. A chat opened inside a project keeps the
+ * group while it's still optimistic.
  */
-export function withOptimisticThread(threadList: Thread[]): Thread[] {
+export function withOptimisticThread(
+  threadList: Thread[],
+  projectId: number | null = null,
+): Thread[] {
   if (threadList.some(t => t.id === EMPTY_THREAD_ID)) {
     return threadList
   }
-  return [{ id: EMPTY_THREAD_ID, status: 'regular', title: '' }, ...threadList]
+  return [
+    { id: EMPTY_THREAD_ID, status: 'regular', title: '', projectId },
+    ...threadList,
+  ]
 }
 
 /**
  * Swaps the optimistic sidebar entry for the real conversation once its id
- * arrives with the first streamed chunk.
+ * arrives with the first streamed chunk. The project assignment carries
+ * over so the chat stays in its group.
  */
 export function reconcileThreadList(
   threadList: Thread[],
@@ -195,7 +204,81 @@ export function reconcileThreadList(
     }
     return withoutPending
   }
-  return [{ id: threadId, status: 'regular', title: '' }, ...withoutPending]
+  const projectId =
+    threadList.find(t => t.id === EMPTY_THREAD_ID)?.projectId ?? null
+  return [
+    { id: threadId, status: 'regular', title: '', projectId },
+    ...withoutPending,
+  ]
+}
+
+/** Maps a persisted message role to the runtime's role names. */
+const graphqlRoleToAuiRole: Record<MessageRole, ThreadMessageLike['role']> = {
+  ASSISTANT: 'assistant',
+  SYSTEM: 'system',
+  USER: 'user',
+}
+
+/** Persisted message → runtime message (no attachments). */
+export function toAuiMessage(m: {
+  id: string
+  content: string
+  role: MessageRole
+}): ThreadMessageLike {
+  return {
+    id: m.id,
+    content: m.content,
+    role: graphqlRoleToAuiRole[m.role],
+  }
+}
+
+/** Persisted message → runtime message, mapping tool-call steps to subtle
+ * system-level rows and carrying file chips on user messages. */
+export function toAuiMessageWithFiles(m: {
+  id: string
+  content: string
+  role: MessageRole
+  toolName?: string | null
+  toolState?: string | null
+}): ThreadMessageLike {
+  if (m.toolName) {
+    return {
+      id: m.id,
+      role: 'system',
+      content: [
+        {
+          type: 'text',
+          text: toolStepText(m.toolName, m.toolState, m.content),
+        },
+      ],
+    }
+  }
+  const message = toAuiMessage(m)
+  const files = (m as { files?: Array<{ id: string; originalName: string }> })
+    .files
+  if (files?.length) {
+    return {
+      ...message,
+      attachments: files.map(f =>
+        userAttachment({ id: f.id, name: f.originalName }),
+      ),
+    }
+  }
+  return message
+}
+
+/** Display text for a tool-call step row (role SYSTEM + tool columns). */
+export function toolStepText(
+  toolName: string,
+  toolState: string | null | undefined,
+  content: string,
+): string {
+  if (toolName === 'update_memories') {
+    if (toolState === 'RUNNING') return 'Updating user memories…'
+    if (toolState === 'ERROR') return content || "Couldn't update memories"
+    return content || 'Updated user memories'
+  }
+  return content
 }
 
 /** Minimal shape of a cached conversation row (apollo AllConversations). */
@@ -203,6 +286,7 @@ export type CachedConversation = {
   id: string
   archived: boolean
   title: string
+  projectId?: number | null
 }
 
 /**

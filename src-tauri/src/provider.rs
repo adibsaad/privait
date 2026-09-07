@@ -68,10 +68,13 @@ impl fmt::Display for ProviderError {
 
 impl std::error::Error for ProviderError {}
 
-/// A streaming chat backend. `id()` names the implementation for diagnostics.
+/// A streaming chat backend. `id()` names the implementation for diagnostics;
+/// `model()` is the configured model name sent in request bodies.
 #[async_trait]
 pub trait ChatProvider: Send + Sync {
     fn id(&self) -> &str;
+
+    fn model(&self) -> &str;
 
     async fn stream_chat(&self, req: ChatRequest) -> Result<MessageStream, ProviderError>;
 }
@@ -86,10 +89,6 @@ pub struct OpenAiCompatProvider {
 }
 
 impl OpenAiCompatProvider {
-    pub fn model(&self) -> &str {
-        &self.model
-    }
-
     pub fn new(
         base_url: impl Into<String>,
         api_key: Option<String>,
@@ -124,6 +123,10 @@ impl OpenAiCompatProvider {
 impl ChatProvider for OpenAiCompatProvider {
     fn id(&self) -> &str {
         "openai-compat"
+    }
+
+    fn model(&self) -> &str {
+        &self.model
     }
 
     async fn stream_chat(&self, req: ChatRequest) -> Result<MessageStream, ProviderError> {

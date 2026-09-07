@@ -4,6 +4,7 @@ import './index.css'
 
 import { Chat } from './components/chat'
 import { ErrorPage } from './pages/error-page'
+import { ProjectPage } from './pages/project'
 import { Root } from './pages/root'
 
 export const router = createBrowserRouter([
@@ -19,6 +20,10 @@ export const router = createBrowserRouter([
       {
         path: 'chat',
         element: <Chat />,
+      },
+      {
+        path: 'project/:projectId',
+        element: <ProjectPage />,
       },
       {
         path: '*',

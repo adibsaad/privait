@@ -9,6 +9,7 @@ import {
   MessagePrimitive,
   SuggestionPrimitive,
   ThreadPrimitive,
+  useMessage,
 } from '@assistant-ui/react'
 import {
   ArrowDownIcon,
@@ -17,6 +18,7 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   CopyIcon,
+  LoaderCircleIcon,
   SquareIcon,
 } from 'lucide-react'
 
@@ -40,8 +42,8 @@ export const Thread: FC = () => {
       }}
     >
       <ThreadPrimitive.Viewport
-        turnAnchor="top"
-        className="aui-thread-viewport relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll scroll-smooth px-4 pt-4"
+        turnAnchor="bottom"
+        className="aui-thread-viewport relative flex flex-1 flex-col overflow-x-auto overflow-y-scroll px-4 pt-4"
         autoScroll={true}
       >
         <AuiIf condition={s => s.thread.isEmpty}>
@@ -52,6 +54,7 @@ export const Thread: FC = () => {
           components={{
             UserMessage,
             AssistantMessage,
+            SystemMessage,
           }}
         />
 
@@ -181,6 +184,33 @@ const ComposerAction: FC = () => {
         </AuiIf>
       </div>
     </div>
+  )
+}
+
+/** Tool-call steps (e.g. the memory distillation) render as a subtle
+ * inline row — not a chat bubble. Text trailing with '…' is still running. */
+const SystemMessage: FC = () => {
+  return (
+    <div className="text-muted-foreground my-1 flex items-center gap-2 px-3 text-xs">
+      <MessagePrimitive.Parts components={{ Text: SystemMessageText }} />
+    </div>
+  )
+}
+
+const SystemMessageText: FC = () => {
+  // The step text carries its own state: '…' trails a still-running step
+  // (e.g. the memory distillation), so the row re-renders via content alone.
+  const message = useMessage()
+  const textPart = message.content.find(part => part.type === 'text')
+  const text = textPart?.type === 'text' ? textPart.text : ''
+
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {text}
+      {text.endsWith('…') && (
+        <LoaderCircleIcon className="size-3 animate-spin" />
+      )}
+    </span>
   )
 }
 
