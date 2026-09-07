@@ -12,14 +12,69 @@ use crate::provider::{ChatMessage, ChatProvider, ChatRequest, ChatRole};
 use rusqlite::OptionalExtension;
 
 pub const DISTILL_SYSTEM_PROMPT: &str = "\
-You extract long-term memories from a chat exchange. Return at most two \
-memories: durable facts, preferences, or context worth remembering later \
-(never transient chatter). Reply with one memory per line, each prefixed \
-with `MEMORY: ` — for example `MEMORY: User is moving to Lisbon in October`. \
-If nothing is worth remembering, reply with `NONE` and nothing else.";
+You maintain the user's long-term memories from a chat exchange: durable \
+facts, preferences, or context worth remembering later (never transient \
+chatter). You may also reconcile the current memories listed alongside the \
+exchange. Reply with one action per line and nothing else:
+- `MEMORY: <fact>` — remember a new fact (at most two)
+- `UPDATE <id>: <rewritten fact>` — a listed memory is outdated; rewrite it
+- `DELETE <id>` — a listed memory is superseded; remove it
+`UPDATE`/`DELETE` apply only to memories offered with a #id. If nothing is \
+worth remembering or changing, reply with `NONE` and nothing else.";
 
 const MAX_MEMORY_CHARS: usize = 500;
-const MAX_MEMORIES_PER_TURN: usize = 2;
+const MAX_ADDS_PER_TURN: usize = 2;
+/// Reconciliation bounds: the model can touch at most this many existing
+/// memories per turn (updates and deletes are capped separately).
+const MAX_MUTATIONS_PER_TURN: usize = 4;
+/// How many recent memories the distiller is offered for reconciliation.
+/// Recency over similarity: contradictions can be lexically distant
+/// ("moving to Lisbon in October" vs "lives in NYC"), and at desktop scale
+/// a bounded recent list is exact and prompt-cheap.
+const RECONCILE_OFFER_LIMIT: usize = 24;
+
+/// What one distillation pass did to the store — rendered into the chat's
+/// tool step so every automatic change is visible in the thread.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct DistillOutcome {
+    pub added: usize,
+    pub updated: usize,
+    pub deleted: usize,
+}
+
+impl DistillOutcome {
+    fn is_noop(&self) -> bool {
+        self.added == 0 && self.updated == 0 && self.deleted == 0
+    }
+
+    /// Step text, e.g. "Updated 2 memories · 1 memory removed".
+    pub fn step_text(&self) -> String {
+        fn noun(count: usize) -> &'static str {
+            if count == 1 {
+                "memory"
+            } else {
+                "memories"
+            }
+        }
+        let mut parts = Vec::new();
+        let changed = self.added + self.updated;
+        if changed > 0 {
+            parts.push(format!("Updated {changed} {}", noun(changed)));
+        }
+        if self.deleted > 0 {
+            parts.push(format!("{} {} removed", self.deleted, noun(self.deleted)));
+        }
+        parts.join(" · ")
+    }
+}
+
+/// One parsed request from the distiller's reply.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MemoryProposal {
+    Add(String),
+    Update { memory_id: i64, content: String },
+    Delete { memory_id: i64 },
+}
 
 /// A stored memory. `conversation_id` is provenance: which chat produced a
 /// distilled memory (manual memories have none).
@@ -215,27 +270,26 @@ fn last_exchange(
 }
 
 /// Settles the chat history's tool-call step after a distillation: DONE
-/// with a count when memories were written, deleted when the model proposed
-/// nothing (no noise for a no-op), ERROR when the distillation failed.
+/// with the outcome when the store changed, deleted when nothing was
+/// proposed (no noise for a no-op), ERROR when the distillation failed.
 pub fn finish_tool_message(
     db: &Db,
     tool_message_id: Option<i64>,
-    outcome: &Result<usize, String>,
+    outcome: &Result<DistillOutcome, String>,
 ) -> Result<(), String> {
     let Some(id) = tool_message_id else {
         return Ok(());
     };
     let conn = db.get().map_err(|err| err.to_string())?;
     match outcome {
-        Ok(0) => {
+        Ok(outcome) if outcome.is_noop() => {
             conn.execute("DELETE FROM messages WHERE id = ?1", [id])
                 .map_err(|err| err.to_string())?;
         }
-        Ok(count) => {
-            let noun = if *count == 1 { "memory" } else { "memories" };
+        Ok(outcome) => {
             conn.execute(
                 "UPDATE messages SET content = ?1, tool_state = 'DONE' WHERE id = ?2",
-                rusqlite::params![format!("Updated {count} {noun}"), id],
+                rusqlite::params![outcome.step_text(), id],
             )
             .map_err(|err| err.to_string())?;
         }
@@ -250,44 +304,116 @@ pub fn finish_tool_message(
     Ok(())
 }
 
-/// Extracts `MEMORY: `-prefixed lines from the provider's reply, bounded and
-/// cleaned. Nothing else in the reply is trusted.
-fn parse_memories(reply: &str) -> Vec<String> {
-    reply
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("MEMORY:"))
-        .map(|line| line.trim().to_string())
-        .filter(|line| !line.is_empty())
-        .map(|mut line| {
-            if line.chars().count() > MAX_MEMORY_CHARS {
-                line = line.chars().take(MAX_MEMORY_CHARS).collect();
+/// Extracts the distiller's requests from its reply — `MEMORY:` /
+/// `UPDATE <id>:` / `DELETE <id>` lines — bounded and cleaned. Nothing else
+/// in the reply is trusted: first-come-first-served per kind (2 adds,
+/// 4 updates, 4 deletes), 500 chars per content, malformed lines dropped.
+fn parse_memory_proposals(reply: &str) -> Vec<MemoryProposal> {
+    fn bounded(content: &str) -> String {
+        let trimmed = content.trim();
+        match trimmed.chars().count() > MAX_MEMORY_CHARS {
+            true => trimmed.chars().take(MAX_MEMORY_CHARS).collect(),
+            false => trimmed.to_string(),
+        }
+    }
+    /// `UPDATE 12: new content` → id 12 + content (also used for bare ids).
+    fn parse_id(rest: &str) -> Option<(i64, Option<&str>)> {
+        let rest = rest.trim();
+        let (id_part, tail) = match rest.split_once(':') {
+            Some((id_part, tail)) => (id_part, Some(tail)),
+            None => (rest, None),
+        };
+        let id = id_part.trim().parse::<i64>().ok()?;
+        Some((id, tail))
+    }
+
+    let mut proposals = Vec::new();
+    let (mut adds, mut updates, mut deletes) = (0, 0, 0);
+    for line in reply.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("MEMORY:") {
+            let content = bounded(rest);
+            if adds < MAX_ADDS_PER_TURN && !content.is_empty() {
+                proposals.push(MemoryProposal::Add(content));
+                adds += 1;
             }
-            line
-        })
-        .take(MAX_MEMORIES_PER_TURN)
-        .collect()
+        } else if let Some(rest) = line.strip_prefix("UPDATE") {
+            let Some((memory_id, Some(content))) = parse_id(rest) else {
+                continue;
+            };
+            let content = bounded(content);
+            if updates < MAX_MUTATIONS_PER_TURN && !content.is_empty() {
+                proposals.push(MemoryProposal::Update { memory_id, content });
+                updates += 1;
+            }
+        } else if let Some(rest) = line.strip_prefix("DELETE") {
+            let Some((memory_id, None)) = parse_id(rest) else {
+                continue;
+            };
+            if deletes < MAX_MUTATIONS_PER_TURN {
+                proposals.push(MemoryProposal::Delete { memory_id });
+                deletes += 1;
+            }
+        }
+    }
+    proposals
 }
 
-/// Post-chat distillation: sends the last exchange through the configured
-/// provider and writes what it proposes as `distilled` memories with chat
-/// provenance. Incognito chats are never touched. Returns how many memories
-/// were written.
+/// The distiller's reconciliation surface: the most recently updated
+/// memories, newest first. The model may only reference the ids it was
+/// offered — and app-side enforcement re-checks authorship (manual memories
+/// are user-authored; only the user changes them).
+fn recent_memories(conn: &rusqlite::Connection, limit: usize) -> rusqlite::Result<Vec<Memory>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, content, source, conversation_id, created_at, updated_at
+         FROM memories ORDER BY updated_at DESC, id DESC LIMIT ?1",
+    )?;
+    let rows = stmt
+        .query_map([limit as i64], memory_from_row)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Post-chat distillation: sends the last exchange plus a bounded view of
+/// the current store through the configured provider, then applies what it
+/// proposes — new memories, rewrites, and removals of superseded distilled
+/// entries — as `distilled` writes with chat provenance. Incognito chats
+/// are never touched.
 pub async fn distill_conversation(
     db: &Db,
     embedder: &dyn Embedder,
     provider: &dyn ChatProvider,
     conversation_id: i64,
-) -> Result<usize, String> {
+) -> Result<DistillOutcome, String> {
     let conn = db.get().map_err(|err| err.to_string())?;
     if is_incognito(&conn, conversation_id) {
-        return Ok(0);
+        return Ok(DistillOutcome::default());
     }
     let Some((user_content, assistant_content)) =
         last_exchange(&conn, conversation_id).map_err(|err| err.to_string())?
     else {
-        return Ok(0);
+        return Ok(DistillOutcome::default());
     };
+    let offered = recent_memories(&conn, RECONCILE_OFFER_LIMIT).map_err(|err| err.to_string())?;
     drop(conn);
+
+    let mut exchange = format!("User: {user_content}\n\nAssistant: {assistant_content}");
+    if !offered.is_empty() {
+        exchange.push_str("\n\nCurrent memories:");
+        for memory in &offered {
+            match memory.source {
+                MemorySource::Distilled => {
+                    exchange.push_str(&format!("\n#{} {}", memory.id, memory.content));
+                }
+                MemorySource::Manual => {
+                    exchange.push_str(&format!(
+                        "\n- {} (written by the user; read-only)",
+                        memory.content
+                    ));
+                }
+            }
+        }
+    }
 
     let request = ChatRequest {
         model: provider.model().to_string(),
@@ -298,7 +424,7 @@ pub async fn distill_conversation(
             },
             ChatMessage {
                 role: ChatRole::User,
-                content: format!("User: {user_content}\n\nAssistant: {assistant_content}"),
+                content: exchange,
             },
         ],
     };
@@ -318,23 +444,50 @@ pub async fn distill_conversation(
         }
     }
 
-    let proposals = parse_memories(&reply);
-    let mut written = 0;
-    for content in proposals {
-        if write_memory(
-            db,
-            embedder,
-            &content,
-            MemorySource::Distilled,
-            Some(conversation_id),
-        )
-        .await
-        .is_ok()
-        {
-            written += 1;
+    let proposals = parse_memory_proposals(&reply);
+
+    // The authorship guardrail, enforced where the prompt can't reach:
+    // only distilled memories offered above may be rewritten or removed.
+    let mutable_ids: std::collections::HashSet<i64> = offered
+        .iter()
+        .filter(|memory| memory.source == MemorySource::Distilled)
+        .map(|memory| memory.id)
+        .collect();
+
+    let mut outcome = DistillOutcome::default();
+    for proposal in proposals {
+        match proposal {
+            MemoryProposal::Add(content) => {
+                if write_memory(
+                    db,
+                    embedder,
+                    &content,
+                    MemorySource::Distilled,
+                    Some(conversation_id),
+                )
+                .await
+                .is_ok()
+                {
+                    outcome.added += 1;
+                }
+            }
+            MemoryProposal::Update { memory_id, content } => {
+                if mutable_ids.contains(&memory_id)
+                    && update_memory(db, embedder, memory_id, &content)
+                        .await
+                        .is_ok()
+                {
+                    outcome.updated += 1;
+                }
+            }
+            MemoryProposal::Delete { memory_id } => {
+                if mutable_ids.contains(&memory_id) && delete_memory(db, memory_id).await.is_ok() {
+                    outcome.deleted += 1;
+                }
+            }
         }
     }
-    Ok(written)
+    Ok(outcome)
 }
 
 #[cfg(test)]
@@ -349,48 +502,133 @@ mod tests {
     use crate::provider::OpenAiCompatProvider;
 
     #[test]
-    fn parse_memories_takes_only_prefixed_lines() {
+    fn parse_proposals_takes_only_protocol_lines() {
         let reply = "Sure, here is what I noted:\nMEMORY: user prefers terse answers\n\
                      noise line\nMEMORY:   \nMEMORY: works in Berlin\nMEMORY: too much\n";
-        let parsed = parse_memories(reply);
+        let parsed = parse_memory_proposals(reply);
         assert_eq!(
             parsed,
-            vec!["user prefers terse answers", "works in Berlin"]
+            vec![
+                MemoryProposal::Add("user prefers terse answers".to_string()),
+                MemoryProposal::Add("works in Berlin".to_string()),
+            ],
+            "only MEMORY: lines count, capped at {MAX_ADDS_PER_TURN}"
         );
     }
 
     #[test]
-    fn parse_memories_truncates_and_caps() {
+    fn parse_proposals_truncates_and_caps() {
         let long = "x".repeat(800);
         let reply = format!("MEMORY: a\nMEMORY: {long}\nMEMORY: c\nMEMORY: d");
-        let parsed = parse_memories(&reply);
+        let parsed = parse_memory_proposals(&reply);
         assert_eq!(parsed.len(), 2);
-        assert_eq!(parsed[0], "a");
-        assert_eq!(parsed[1].chars().count(), MAX_MEMORY_CHARS);
+        match &parsed[1] {
+            MemoryProposal::Add(content) => assert_eq!(content.chars().count(), MAX_MEMORY_CHARS),
+            other => panic!("expected Add, got {other:?}"),
+        }
     }
 
     #[test]
-    fn parse_memories_empty_reply_is_empty() {
-        assert!(parse_memories("nothing notable").is_empty());
+    fn parse_proposals_mutations() {
+        let reply = "UPDATE 12: user lives in SF\nDELETE 12\nDELETE broken\n\
+                     UPDATE not-an-id: x\nUPDATE 7\nDELETE 13: with content\n\
+                     MEMORY: user works at Acme\nDELETE 14";
+        let parsed = parse_memory_proposals(reply);
+        assert_eq!(
+            parsed,
+            vec![
+                MemoryProposal::Update {
+                    memory_id: 12,
+                    content: "user lives in SF".to_string()
+                },
+                MemoryProposal::Delete { memory_id: 12 },
+                MemoryProposal::Add("user works at Acme".to_string()),
+                MemoryProposal::Delete { memory_id: 14 },
+            ],
+            "malformed lines are dropped: non-numeric ids, UPDATE without content, \
+             DELETE with content"
+        );
+    }
+
+    #[test]
+    fn parse_proposals_caps_mutations_per_turn() {
+        let reply = "UPDATE 1: a\nUPDATE 2: b\nUPDATE 3: c\nUPDATE 4: d\nUPDATE 5: e\n\
+                     DELETE 1\nDELETE 2\nDELETE 3\nDELETE 4\nDELETE 5\nDELETE 6";
+        let parsed = parse_memory_proposals(reply);
+        let updates = parsed
+            .iter()
+            .filter(|p| matches!(p, MemoryProposal::Update { .. }))
+            .count();
+        let deletes = parsed
+            .iter()
+            .filter(|p| matches!(p, MemoryProposal::Delete { .. }))
+            .count();
+        assert_eq!(updates, MAX_MUTATIONS_PER_TURN);
+        assert_eq!(deletes, MAX_MUTATIONS_PER_TURN);
+    }
+
+    #[test]
+    fn parse_proposals_empty_reply_is_empty() {
+        assert!(parse_memory_proposals("nothing notable, NONE").is_empty());
+    }
+
+    #[test]
+    fn step_text_pluralizes_and_enumerates() {
+        assert_eq!(
+            DistillOutcome {
+                added: 2,
+                ..Default::default()
+            }
+            .step_text(),
+            "Updated 2 memories"
+        );
+        assert_eq!(
+            DistillOutcome {
+                added: 1,
+                updated: 1,
+                deleted: 1
+            }
+            .step_text(),
+            "Updated 2 memories · 1 memory removed"
+        );
+        assert_eq!(
+            DistillOutcome {
+                deleted: 2,
+                ..Default::default()
+            }
+            .step_text(),
+            "2 memories removed"
+        );
+        assert!(DistillOutcome::default().is_noop());
     }
 
     /// Real SSE mock over HTTP (the provider goes through reqwest), replying
-    /// with the configured text and capturing each request's `model` field.
+    /// with the configured text and capturing each request's `model` field and
+    /// user message (the distiller's exchange + memory offer list).
+    struct CapturedRequest {
+        model: String,
+        user_content: String,
+    }
+
     async fn spawn_memories_mock_provider(
-        reply: &'static str,
-    ) -> (String, Arc<tokio::sync::Mutex<Vec<String>>>) {
+        reply: impl Into<String>,
+    ) -> (String, Arc<tokio::sync::Mutex<Vec<CapturedRequest>>>) {
         use bytes::Bytes;
 
-        let captured_models = Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let reply = reply.into();
+        let captured = Arc::new(tokio::sync::Mutex::new(Vec::new()));
         let app = {
-            let captured_models = captured_models.clone();
+            let captured = captured.clone();
             axum::Router::new().route(
                 "/v1/chat/completions",
                 axum::routing::post(move |Json(body): Json<serde_json::Value>| async move {
-                    captured_models
-                        .lock()
-                        .await
-                        .push(body["model"].as_str().unwrap_or_default().to_string());
+                    captured.lock().await.push(CapturedRequest {
+                        model: body["model"].as_str().unwrap_or_default().to_string(),
+                        user_content: body["messages"][1]["content"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                    });
                     let frames = vec![
                         Bytes::from(format!(
                             "data: {}\n\n",
@@ -411,7 +649,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        (base_url, captured_models)
+        (base_url, captured)
     }
 
     fn seed_exchange(conn: &rusqlite::Connection, conversation_id: i64, incognito: bool) {
@@ -444,7 +682,7 @@ mod tests {
             seed_exchange(&conn, 3, false);
         }
 
-        let (base_url, captured_models) = spawn_memories_mock_provider(
+        let (base_url, captured) = spawn_memories_mock_provider(
             "MEMORY: user reports March commute exhaustion\nMEMORY: wants help planning the month",
         )
         .await;
@@ -462,12 +700,18 @@ mod tests {
             crate::schema::insert_tool_message(&conn, 3, "update_memories", "RUNNING").unwrap();
         drop(conn);
 
-        let written = distill_conversation(&db, embedder.as_ref(), &provider, 3)
+        let outcome = distill_conversation(&db, embedder.as_ref(), &provider, 3)
             .await
             .unwrap();
-        assert_eq!(written, 2);
+        assert_eq!(
+            outcome,
+            DistillOutcome {
+                added: 2,
+                ..Default::default()
+            }
+        );
 
-        finish_tool_message(&db, Some(tool_message_id), &Ok(written)).unwrap();
+        finish_tool_message(&db, Some(tool_message_id), &Ok(outcome)).unwrap();
 
         let conn = db.get().unwrap();
         let tool_row: (String, String) = conn
@@ -483,7 +727,7 @@ mod tests {
         // Regression: the distillation request must carry the provider's
         // configured model — an empty model is rejected by real backends,
         // which silently killed automatic memory writes.
-        assert_eq!(*captured_models.lock().await, vec!["mock".to_string()]);
+        assert_eq!(captured.lock().await[0].model, "mock");
 
         let conn = db.get().unwrap();
         let memories = list_memories(&conn).unwrap();
@@ -515,11 +759,149 @@ mod tests {
         let embedder: Arc<dyn Embedder> =
             Arc::new(FakeEmbedder::new(|_| vec![1.0; crate::db::EMBEDDING_DIM]));
 
-        let written = distill_conversation(&db, embedder.as_ref(), &provider, 4)
+        let outcome = distill_conversation(&db, embedder.as_ref(), &provider, 4)
             .await
             .unwrap();
-        assert_eq!(written, 0);
+        assert_eq!(outcome, DistillOutcome::default());
         let conn = db.get().unwrap();
         assert!(list_memories(&conn).unwrap().is_empty());
+    }
+
+    /// The 0029 behavior: the distiller sees the recent store and rewrites
+    /// or removes superseded `distilled` memories. Manual memories are
+    /// offered for reference but are read-only to the model, and ids it
+    /// was never offered are ignored.
+    #[tokio::test]
+    async fn distillation_reconciles_updates_and_deletes() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db = crate::db::init(dir.path()).unwrap();
+        {
+            let conn = db.get().unwrap();
+            seed_exchange(&conn, 3, false);
+        }
+        let embedder: Arc<dyn Embedder> = Arc::new(FakeEmbedder::new(|text| {
+            vec![text.len() as f32; crate::db::EMBEDDING_DIM]
+        }));
+
+        let stale_city = write_memory(
+            &db,
+            embedder.as_ref(),
+            "User lives in NYC",
+            MemorySource::Distilled,
+            Some(3),
+        )
+        .await
+        .unwrap();
+        let stale_bike = write_memory(
+            &db,
+            embedder.as_ref(),
+            "User owns a road bike",
+            MemorySource::Distilled,
+            Some(3),
+        )
+        .await
+        .unwrap();
+        let manual = write_memory(
+            &db,
+            embedder.as_ref(),
+            "User drinks tea",
+            MemorySource::Manual,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let reply = format!(
+            "UPDATE 999: forged id\nDELETE 998: forged too\n\
+             UPDATE {manual}: user drinks coffee\n\
+             UPDATE {stale_city}: User lives in SF\nDELETE {stale_bike}\n\
+             MEMORY: User works at Acme"
+        );
+        let (base_url, captured) = spawn_memories_mock_provider(reply).await;
+        let provider =
+            OpenAiCompatProvider::from_settings(Some(base_url), None, Some("mock".to_string()))
+                .unwrap();
+
+        let outcome = distill_conversation(&db, embedder.as_ref(), &provider, 3)
+            .await
+            .unwrap();
+
+        // The offer list reached the prompt: distilled memories carry #ids,
+        // the manual one is marked read-only.
+        let user_content = captured.lock().await[0].user_content.clone();
+        assert!(
+            user_content.contains(&format!("#{stale_city} User lives in NYC")),
+            "offer list must carry distilled memories: {user_content}"
+        );
+        assert!(
+            user_content.contains("User drinks tea (written by the user; read-only)"),
+            "manual memories are offered read-only: {user_content}"
+        );
+
+        assert_eq!(
+            outcome,
+            DistillOutcome {
+                added: 1,
+                updated: 1,
+                deleted: 1
+            },
+            "forged ids and the manual memory are ignored"
+        );
+
+        let conn = db.get().unwrap();
+        let city: (String, String) = conn
+            .query_row(
+                "SELECT content, source FROM memories WHERE id = ?1",
+                [stale_city],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            city,
+            (
+                "User lives in SF".to_string(),
+                MemorySource::Distilled.as_str().to_string()
+            ),
+            "superseded fact is rewritten in place (id + source kept)"
+        );
+        let bike_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memories WHERE id = ?1",
+                [stale_bike],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(bike_count, 0, "superseded memory removed");
+        let bike_vector: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM memories_vec WHERE memory_id = ?1",
+                [stale_bike],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(bike_vector, 0, "deletion removes the vector too");
+        let manual_content: String = conn
+            .query_row(
+                "SELECT content FROM memories WHERE id = ?1",
+                [manual],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            manual_content, "User drinks tea",
+            "manual memories are read-only to the model"
+        );
+        let added: Vec<(String, String)> = conn
+            .prepare("SELECT content, source FROM memories WHERE content LIKE 'User works at%'")
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            added,
+            vec![("User works at Acme".to_string(), "distilled".to_string())],
+            "new fact added with distilled source"
+        );
     }
 }

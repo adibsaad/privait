@@ -51,17 +51,17 @@ step row. No GraphQL contract change — the step is message content.
 
 ## Acceptance criteria
 
-- [ ] Distill request includes the 24 most recently updated memories
+- [x] Distill request includes the 24 most recently updated memories
       (id + content, bounded)
-- [ ] Parser accepts all three line shapes with the caps; unknown/foreign
+- [x] Parser accepts all three line shapes with the caps; unknown/foreign
       ids and manual-memory mutations are ignored (unit tests)
-- [ ] NYC→SF: a scripted mock shows the second turn rewrites or removes the
+- [x] NYC→SF: a scripted mock shows the second turn rewrites or removes the
       stale memory — the two never coexist after the second distillation
-- [ ] Updated memories re-embed and keep id/source/provenance; deletions
+- [x] Updated memories re-embed and keep id/source/provenance; deletions
       remove row and vector
-- [ ] Tool step enumerates changes; no-op turns leave no trace; incognito
+- [x] Tool step enumerates changes; no-op turns leave no trace; incognito
       chats still never distill
-- [ ] Full gates green (cargo fmt/clippy/tests, schema snapshot if touched,
+- [x] Full gates green (cargo fmt/clippy/tests, schema snapshot if touched,
       tsc, vite build, eslint, vitest)
 
 ## Constraints
@@ -70,3 +70,24 @@ step row. No GraphQL contract change — the step is message content.
 - Privacy invariants: no logging of memory content beyond the inspectable
   rows themselves; everything stays user-visible/editable/deletable.
 - No schema migration (memories table unchanged).
+
+## Review
+- `DISTILL_SYSTEM_PROMPT` now teaches the three-line protocol; the distill
+  request appends the offer list (24 most recent, newest first) to the
+  exchange — distilled entries as `#id content`, manual ones read-only.
+- `parse_memory_proposals` replaces `parse_memories`: bounded (2 adds,
+  4 updates, 4 deletes per turn, 500 chars), malformed lines dropped.
+- `distill_conversation` returns `DistillOutcome { added, updated, deleted }`
+  and applies proposals through the existing CRUD (rewrites re-embed in
+  place; deletions remove row + vector). The authorship guardrail is
+  enforced app-side — only distilled ids from the offer list are mutable,
+  so prompt-forged or manual ids are ignored.
+- `finish_tool_message` renders the outcome: "Updated 2 memories",
+  "Updated 2 memories · 1 memory removed", "2 memories removed"; no-ops
+  still delete the step row. No GraphQL/contract change, no migration.
+- Tests: proposal parser (shapes, caps, malformed lines), step text
+  (pluralization), and a full HTTP-path reconcile test — stale fact
+  rewritten in place (id/source kept), superseded memory + vector deleted,
+  new fact added, manual memory untouched, forged ids ignored.
+- Gates: cargo fmt/clippy(-D warnings)/120 tests, tsc, vite build, eslint
+  (0 errors), vitest (35), schema parity — all green.

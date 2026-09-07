@@ -1,17 +1,14 @@
-# Incognito QA follow-ups — 2026-09-07
+# Incognito QA follow-ups + memory reconciliation — 2026-09-07
 
 Branch: `t3code/memory-toast-plural-fixes`
 
 ## Tasks
-- [x] [0027] Incognito badge/toggle survive restart — done (moved to done/)
-- [x] [0028] Start a new chat incognito from the composer — done (moved to done/)
-- [x] Verify: cargo fmt/clippy/test, SDL snapshot + codegen, schema parity,
-      tsc -b + vite build + eslint + vitest run — all green
-- [x] Live smoke (serve_dev + vite, isolated data dir, mock provider):
-      badge persists across reload, "Leave incognito" works post-restart,
-      global + project composer toggles birth incognito chats with badge,
-      no distillation step in incognito chats
+- [x] [0027] Incognito badge/toggle survive restart — committed e8fb1a4
+- [x] [0028] Start a new chat incognito from the composer — committed e8fb1a4
+- [x] [0029] Distillation reconciles memories (update/delete) — done,
+      moving to done/ with review; commit this session
 
 ## Status
-Both tasks verified and closed. Changes NOT yet committed — awaiting the
-human's go (they are running their own memories QA pass on top).
+0029 implemented, all gates green. Not pushed. Glossary's "Distillation"
+entry should gain the reconciliation behavior when the user confirms the
+live behavior (next docs touch).
