@@ -14,6 +14,11 @@ type ConversationMessageChunk {
 	messageId: ID!
 	messageChunk: String!
 	done: Boolean
+	"""
+	True while the provider streams reasoning deltas (thinking models):
+	the UI shows a "Thinking…" state instead of a generic spinner.
+	"""
+	reasoning: Boolean!
 }
 
 """

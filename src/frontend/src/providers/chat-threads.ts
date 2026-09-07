@@ -70,11 +70,19 @@ export function assistantChunkMessage(
 }
 
 function textOf(message: ThreadMessageLike): string {
-  const part = message.content[0]
+  // Content is array-shaped while a message streams (assistantChunkMessage)
+  // but string-shaped once a settle-poll merge lands server rows
+  // (toAuiMessage) — both shapes interleave on the same thread, so both
+  // must round-trip losslessly.
+  const content = message.content
+  if (typeof content === 'string') {
+    return content
+  }
+  const part = content[0]
   if (typeof part === 'string') {
     return part
   }
-  return 'text' in part ? part.text : ''
+  return part && 'text' in part ? (part.text ?? '') : ''
 }
 
 /**

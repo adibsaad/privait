@@ -1,3 +1,4 @@
+/* eslint-disable */
 import { TypedDocumentNode as DocumentNode } from '@graphql-typed-document-node/core'
 
 export type Maybe<T> = T | null
@@ -49,6 +50,11 @@ export type ConversationMessageChunk = {
   messageChunk: Scalars['String']['output']
   messageId: Scalars['ID']['output']
   previousMessageId: Scalars['ID']['output']
+  /**
+   * True while the provider streams reasoning deltas (thinking models):
+   * the UI shows a "Thinking…" state instead of a generic spinner.
+   */
+  reasoning: Scalars['Boolean']['output']
 }
 
 /**
@@ -745,6 +751,7 @@ export type ConversationSubSubscription = {
           messageId: string
           messageChunk: string
           done?: boolean | null
+          reasoning: boolean
         }
       }
 }
@@ -2188,6 +2195,10 @@ export const ConversationSubDocument = {
                             {
                               kind: 'Field',
                               name: { kind: 'Name', value: 'done' },
+                            },
+                            {
+                              kind: 'Field',
+                              name: { kind: 'Name', value: 'reasoning' },
                             },
                           ],
                         },

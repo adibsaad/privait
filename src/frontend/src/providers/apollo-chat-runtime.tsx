@@ -68,6 +68,7 @@ gql(/* GraphQL */ `
           messageId
           messageChunk
           done
+          reasoning
         }
       }
 
@@ -165,6 +166,9 @@ export type ThreadActions = {
   remove: (threadId: string) => void
   /** Conversations with a run in flight (streaming or queued). */
   runningThreadIds: ReadonlySet<string>
+  /** Conversations currently receiving reasoning deltas (thinking models):
+   * the thread shows a "Thinking…" state instead of a generic spinner. */
+  thinkingThreadIds: ReadonlySet<string>
 }
 
 export const ThreadActionsContext = createContext<ThreadActions | null>(null)
@@ -248,6 +252,11 @@ export function ApolloChatRuntimeProvider({
   const [runningThreadIds, runningThreadIdsSet] = useState<ReadonlySet<string>>(
     new Set(),
   )
+  // Threads currently receiving reasoning deltas (thinking models) — the
+  // thread shows a "Thinking…" state; cleared on first content or stream end.
+  const [thinkingThreadIds, thinkingThreadIdsSet] = useState<
+    ReadonlySet<string>
+  >(new Set())
   const [deleteConversationMut] = useMutation(DeleteConversationDocument)
   const [renameConversationMut] = useMutation(RenameConversationDocument)
   const [archiveConversationMut] = useMutation(ArchiveConversationDocument)
@@ -348,49 +357,68 @@ export function ApolloChatRuntimeProvider({
       activeStreamsRef.current.get(streamId)?.unsubscribe()
       activeStreamsRef.current.delete(streamId)
       syncRunningThreadIds()
+      if (threadId != null) {
+        const finishedThreadId: string = threadId
+        thinkingThreadIdsSet(prev => {
+          if (!prev.has(finishedThreadId)) {
+            return prev
+          }
+          const next = new Set(prev)
+          next.delete(finishedThreadId)
+          return next
+        })
+      }
     }
 
     // The distillation step is written to history around the done chunk:
     // the RUNNING row lands with the reply, then the worker flips it to
-    // DONE/ERROR a few seconds later. Re-fetch the conversation at both
-    // moments so the step appears and settles without a reload. The merge
-    // keeps optimistic rows the user typed since the fetch snapshot.
-    const refetchForToolStep = (attempts: number) => {
-      if (attempts <= 0 || threadId == null) {
+    // DONE/ERROR — seconds later with a fast provider, minutes later with a
+    // reasoning one (the distill request goes through the same thinking
+    // model). Poll until the step actually settles instead of a fixed
+    // schedule, so the UI never shows a stale RUNNING. The merge keeps
+    // optimistic rows the user typed since the fetch snapshot.
+    const settleToolStep = (delayMs: number, deadline: number) => {
+      if (threadId == null) {
         return
       }
       const threadIdAtFetch: string = threadId
-      window.setTimeout(
-        () => {
-          apolloClient
-            .query({
-              query: GetConversationWithMessagesDocument,
-              variables: { id: Number(threadIdAtFetch) },
-              fetchPolicy: 'network-only',
+      window.setTimeout(() => {
+        const next = () => settleToolStep(Math.min(delayMs * 2, 8000), deadline)
+        if (Date.now() > deadline) {
+          return
+        }
+        apolloClient
+          .query({
+            query: GetConversationWithMessagesDocument,
+            variables: { id: Number(threadIdAtFetch) },
+            fetchPolicy: 'network-only',
+          })
+          .then(result => {
+            const conversation = result.data?.conversation
+            if (!conversation) {
+              return
+            }
+            setThreads(prev => {
+              const existing = prev.get(threadIdAtFetch) ?? []
+              const optimistic = existing.filter(m => m.id === 'temp-user')
+              const serverMessages = conversation.messages.map(
+                toAuiMessageWithFiles,
+              )
+              return new Map(prev).set(threadIdAtFetch, [
+                ...serverMessages,
+                ...optimistic,
+              ])
             })
-            .then(result => {
-              const conversation = result.data?.conversation
-              if (!conversation) {
-                return
-              }
-              setThreads(prev => {
-                const existing = prev.get(threadIdAtFetch) ?? []
-                const optimistic = existing.filter(m => m.id === 'temp-user')
-                const serverMessages = conversation.messages.map(
-                  toAuiMessageWithFiles,
-                )
-                return new Map(prev).set(threadIdAtFetch, [
-                  ...serverMessages,
-                  ...optimistic,
-                ])
-              })
-              refetchForToolStep(attempts - 1)
-            })
-            .catch(() => {})
-        },
-        attempts === 2 ? 2000 : 7000,
-      )
+            // Settled (DONE/ERROR) or never created — stop; otherwise
+            // keep waiting the worker out.
+            if (conversation.messages.some(m => m.toolState === 'RUNNING')) {
+              next()
+            }
+          })
+          .catch(next)
+      }, delayMs)
     }
+    settleToolStep(2000, Date.now() + 5 * 60_000)
 
     const handleData = (data: unknown) => {
       const conversation = (
@@ -404,6 +432,7 @@ export function ApolloChatRuntimeProvider({
               previousMessageId?: string
               messageChunk?: string
               done?: boolean | null
+              reasoning?: boolean | null
             }
           }
         }
@@ -421,7 +450,7 @@ export function ApolloChatRuntimeProvider({
         finalize()
         // Reconcile the tool-call step (memory distillation) if one is
         // expected for this turn.
-        refetchForToolStep(2)
+        settleToolStep(2000, Date.now() + 5 * 60_000)
         return
       }
 
@@ -429,8 +458,24 @@ export function ApolloChatRuntimeProvider({
       const messageId = conversation?.data?.messageId
       const previousMessageId = conversation?.data?.previousMessageId
       const chunk = conversation?.data?.messageChunk ?? ''
+      const reasoning = conversation?.data?.reasoning === true
       if (!messageId || !chunkThreadId || !previousMessageId) {
         return
+      }
+
+      // The thread's thinking state tracks reasoning deltas; the first
+      // content chunk (or the stream's end) clears it.
+      if (reasoning) {
+        thinkingThreadIdsSet(prev => new Set(prev).add(chunkThreadId))
+      } else {
+        thinkingThreadIdsSet(prev => {
+          if (!prev.has(chunkThreadId)) {
+            return prev
+          }
+          const next = new Set(prev)
+          next.delete(chunkThreadId)
+          return next
+        })
       }
 
       if (!gotFirstChunk) {
@@ -701,6 +746,7 @@ export function ApolloChatRuntimeProvider({
 
   const threadActions: ThreadActions = {
     runningThreadIds,
+    thinkingThreadIds,
     switchTo: threadId => {
       setCurrentThreadId(threadId)
       navigate('/chat')

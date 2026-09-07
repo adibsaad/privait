@@ -139,6 +139,46 @@ describe('appendAssistantChunk', () => {
 
     expect(appendAssistantChunk(threads, '7', '100', 'He')).toBe(threads)
   })
+
+  it('survives a settle-poll merge that landed server rows mid-stream', () => {
+    // Merges re-shape streamed messages to the server's string content;
+    // chunks arriving afterwards must extend that text, not crash on it.
+    const threads = new Map([
+      [
+        '7',
+        [
+          userMessage('99', 'hello'),
+          { id: '100', role: 'assistant' as const, content: '' },
+        ],
+      ],
+    ])
+
+    const next = appendAssistantChunk(threads, '7', '100', 'He')
+
+    const messages = next.get('7') ?? []
+    expect(messages[messages.length - 1]).toEqual(
+      assistantChunkMessage('100', 'He'),
+    )
+  })
+
+  it('extends merged server text instead of dropping it', () => {
+    const threads = new Map([
+      [
+        '7',
+        [
+          userMessage('99', 'hello'),
+          { id: '100', role: 'assistant' as const, content: 'Hel' },
+        ],
+      ],
+    ])
+
+    const next = appendAssistantChunk(threads, '7', '100', 'lo')
+
+    const messages = next.get('7') ?? []
+    expect(messages[messages.length - 1]).toEqual(
+      assistantChunkMessage('100', 'Hello'),
+    )
+  })
 })
 
 describe('dropNewThreadBucket', () => {

@@ -34,6 +34,7 @@ import { TooltipIconButton } from '@frontend/components/assistant-ui/tooltip-ico
 import { Button } from '@frontend/components/ui/button'
 import { useThreadContext } from '@frontend/context/thread'
 import { cn } from '@frontend/lib/utils'
+import { useThreadActions } from '@frontend/providers/apollo-chat-runtime'
 
 export const Thread: FC = () => {
   return (
@@ -62,6 +63,7 @@ export const Thread: FC = () => {
 
         <ThreadPrimitive.ViewportFooter className="aui-thread-viewport-footer max-w-(--thread-max-width) sticky bottom-0 mx-auto mt-auto flex w-full flex-col gap-4 overflow-visible rounded-t-3xl bg-white pb-4 md:pb-6 dark:bg-neutral-950">
           <ThreadScrollToBottom />
+          <ThinkingIndicator />
           <Composer />
         </ThreadPrimitive.ViewportFooter>
       </ThreadPrimitive.Viewport>
@@ -129,6 +131,23 @@ const ThreadSuggestionItem: FC = () => {
           </span>
         </Button>
       </SuggestionPrimitive.Trigger>
+    </div>
+  )
+}
+
+/** Reasoning models stream thinking deltas before any visible text; the
+ * backend flags those frames so the loading state can say what the model is
+ * actually doing instead of a generic spinner. */
+const ThinkingIndicator: FC = () => {
+  const { currentThreadId } = useThreadContext()
+  const { thinkingThreadIds } = useThreadActions()
+  if (!thinkingThreadIds.has(currentThreadId)) {
+    return null
+  }
+  return (
+    <div className="text-muted-foreground my-1 flex items-center gap-2 px-3 text-xs">
+      <LoaderCircleIcon className="size-3 animate-spin" />
+      Thinking…
     </div>
   )
 }

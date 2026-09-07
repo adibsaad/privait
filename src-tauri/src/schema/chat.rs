@@ -148,6 +148,9 @@ pub struct ConversationMessageChunk {
     pub message_id: ID,
     pub message_chunk: String,
     pub done: Option<bool>,
+    /// True while the provider streams reasoning deltas (thinking models):
+    /// the UI shows a "Thinking…" state instead of a generic spinner.
+    pub reasoning: bool,
 }
 
 #[derive(Debug, SimpleObject)]
@@ -667,6 +670,9 @@ impl Subscription {
 
             if let Some((mut stream, first)) = opened {
                 let mut pending_first = Some(first);
+                // The UI shows "Thinking…" while reasoning deltas flow; one
+                // transition chunk is enough (skip the rest of the phase).
+                let mut reasoning_in_flight = false;
                 loop {
                     let item = match pending_first.take() {
                         Some(item) => item,
@@ -689,7 +695,24 @@ impl Subscription {
                     }
 
                     match item {
-                        Some(Ok(chunk)) => {
+                        Some(Ok(delta)) => {
+                            let (chunk, reasoning) = match delta {
+                                crate::provider::MessageDelta::Content(text) => (text, false),
+                                crate::provider::MessageDelta::Reasoning(_) => {
+                                    (String::new(), true)
+                                }
+                            };
+                            if reasoning {
+                                // Coalesce the reasoning phase into a single
+                                // signal; the transition back to content
+                                // clears the indicator frontend-side.
+                                if reasoning_in_flight {
+                                    continue;
+                                }
+                                reasoning_in_flight = true;
+                            } else {
+                                reasoning_in_flight = false;
+                            }
                             let emitted = tx
                                 .send(SubscriptionConversationResult::SubscriptionConversationSuccess(
                                     SubscriptionConversationSuccess {
@@ -699,6 +722,7 @@ impl Subscription {
                                             message_id: ID(assistant_message_id.to_string()),
                                             message_chunk: chunk.clone(),
                                             done: Some(false),
+                                            reasoning,
                                         },
                                     },
                                 ))
@@ -747,6 +771,7 @@ impl Subscription {
                                         message_id: ID(assistant_message_id.to_string()),
                                         message_chunk: String::new(),
                                         done: Some(true),
+                                        reasoning: false,
                                     },
                                 },
                             ),

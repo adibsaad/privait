@@ -430,16 +430,17 @@ pub async fn distill_conversation(
     };
 
     // The provider abstraction streams; a distillation needs the whole
-    // reply, so drain the stream.
+    // reply, so drain the stream. Reasoning deltas carry no reply text.
     let mut stream = provider
         .stream_chat(request)
         .await
         .map_err(|err: ProviderError| err.to_string())?;
     let mut reply = String::new();
     use futures_util::StreamExt;
-    while let Some(chunk) = stream.next().await {
-        match chunk {
-            Ok(piece) => reply.push_str(&piece),
+    while let Some(delta) = stream.next().await {
+        match delta {
+            Ok(crate::provider::MessageDelta::Content(piece)) => reply.push_str(&piece),
+            Ok(crate::provider::MessageDelta::Reasoning(_)) => {}
             Err(err) => return Err(err.to_string()),
         }
     }
