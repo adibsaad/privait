@@ -37,6 +37,7 @@ import {
   dropNewThreadBucket,
   reconcileFirstChunk,
   reconcileThreadList,
+  isHiddenMemoryStep,
   toAuiMessageWithFiles,
   userMessage,
   withOptimisticThread,
@@ -401,9 +402,9 @@ export function ApolloChatRuntimeProvider({
             setThreads(prev => {
               const existing = prev.get(threadIdAtFetch) ?? []
               const optimistic = existing.filter(m => m.id === 'temp-user')
-              const serverMessages = conversation.messages.map(
-                toAuiMessageWithFiles,
-              )
+              const serverMessages = conversation.messages
+                .filter(m => !isHiddenMemoryStep(m))
+                .map(toAuiMessageWithFiles)
               return new Map(prev).set(threadIdAtFetch, [
                 ...serverMessages,
                 ...optimistic,
@@ -638,21 +639,16 @@ export function ApolloChatRuntimeProvider({
     },
 
     onDelete: threadId => {
-      let nextThreadId: string | null = null
-      setThreadList(prev => {
-        const newList = prev.filter(t => t.id !== threadId)
-        if (newList.length) {
-          nextThreadId = newList[0].id
-        }
-        return newList
-      })
+      setThreadList(prev => prev.filter(t => t.id !== threadId))
       setThreads(prev => {
         const next = new Map(prev)
         next.delete(threadId)
         return next
       })
+      // Deleting the selected chat lands on the new-chat page (not the
+      // next chat in the list); deleting another chat keeps the selection.
       if (currentThreadId === threadId) {
-        setCurrentThreadId(nextThreadId ?? EMPTY_THREAD_ID)
+        setCurrentThreadId(EMPTY_THREAD_ID)
       }
       syncCache(threadId, 'remove')
 
@@ -809,26 +805,23 @@ export function ApolloChatRuntimeProvider({
       }
     },
     remove: threadId => {
-      let nextThreadId: string | null = null
-      setThreadList(prev => {
-        const newList = prev.filter(t => t.id !== threadId)
-        if (newList.length) {
-          nextThreadId = newList[0].id
-        }
-        return newList
-      })
+      setThreadList(prev => prev.filter(t => t.id !== threadId))
       setThreads(prev => {
         const next = new Map(prev)
         next.delete(threadId)
         return next
       })
+      // Deleting the selected chat lands on the new-chat page (not the
+      // next chat in the list); deleting another chat keeps the selection.
       if (currentThreadId === threadId) {
-        setCurrentThreadId(nextThreadId ?? EMPTY_THREAD_ID)
+        setCurrentThreadId(EMPTY_THREAD_ID)
       }
       syncCache(threadId, 'remove')
       if (Number(threadId)) {
         deleteConversationMut({
-          variables: { conversationId: Number(threadId) },
+          variables: {
+            conversationId: Number(threadId),
+          },
         })
       }
     },

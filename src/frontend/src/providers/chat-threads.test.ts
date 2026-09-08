@@ -9,7 +9,7 @@ import {
   applyConversationCacheUpdate,
   assistantChunkMessage,
   dropNewThreadBucket,
-  pickInitialThreadId,
+  isHiddenMemoryStep,
   reconcileFirstChunk,
   reconcileThreadList,
   userMessage,
@@ -353,23 +353,18 @@ describe('userMessage attachments', () => {
   })
 })
 
-describe('pickInitialThreadId', () => {
-  it('selects the first non-archived conversation', () => {
-    const conversations = [
-      { id: '1', archived: true },
-      { id: '2', archived: false },
-      { id: '3', archived: false },
-    ]
-    expect(pickInitialThreadId(conversations)).toBe('2')
-  })
-
-  it('never restores the app into an archived chat', () => {
-    const conversations = [{ id: '1', archived: true }]
-    expect(pickInitialThreadId(conversations)).toBe(EMPTY_THREAD_ID)
-  })
-
-  it('starts on the new-chat page when history is empty', () => {
-    expect(pickInitialThreadId([])).toBe(EMPTY_THREAD_ID)
+describe('isHiddenMemoryStep', () => {
+  it('hides only the RUNNING distillation row', () => {
+    expect(
+      isHiddenMemoryStep({ toolName: 'update_memories', toolState: 'RUNNING' }),
+    ).toBe(true)
+    expect(
+      isHiddenMemoryStep({ toolName: 'update_memories', toolState: 'DONE' }),
+    ).toBe(false)
+    expect(
+      isHiddenMemoryStep({ toolName: 'update_memories', toolState: 'ERROR' }),
+    ).toBe(false)
+    expect(isHiddenMemoryStep({ toolName: null, toolState: null })).toBe(false)
   })
 })
 

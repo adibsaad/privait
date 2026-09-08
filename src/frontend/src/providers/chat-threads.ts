@@ -252,6 +252,17 @@ export function toAuiMessage(m: {
   }
 }
 
+/** True for the memory distillation's RUNNING row — hidden from rendering
+ * (most turns change nothing; a pending "Updating user memories…" step
+ * implies the opposite). The row stays in the data: it drives the
+ * settle-poll and is the worker's settlement target. */
+export function isHiddenMemoryStep(m: {
+  toolName?: string | null
+  toolState?: string | null
+}): boolean {
+  return m.toolName === 'update_memories' && m.toolState === 'RUNNING'
+}
+
 /** Persisted message → runtime message, mapping tool-call steps to subtle
  * system-level rows and carrying file chips on user messages. */
 export function toAuiMessageWithFiles(m: {
@@ -308,16 +319,6 @@ export type CachedConversation = {
   title: string
   projectId?: number | null
   incognito?: boolean
-}
-
-/**
- * Boot selection: never restore the app into an archived chat — pick the
- * first live conversation, or start on the new-chat page.
- */
-export function pickInitialThreadId(
-  conversations: ReadonlyArray<{ id: string; archived: boolean }>,
-): string {
-  return conversations.find(c => !c.archived)?.id ?? EMPTY_THREAD_ID
 }
 
 /** Minimal update surface for a cached conversation (apollo AllConversations). */

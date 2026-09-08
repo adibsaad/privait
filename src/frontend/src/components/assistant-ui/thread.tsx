@@ -1,4 +1,4 @@
-import type { FC } from 'react'
+import { useEffect, type FC } from 'react'
 
 import {
   ActionBarPrimitive,
@@ -32,11 +32,24 @@ import { MarkdownText } from '@frontend/components/assistant-ui/markdown-text'
 import { ToolFallback } from '@frontend/components/assistant-ui/tool-fallback'
 import { TooltipIconButton } from '@frontend/components/assistant-ui/tooltip-icon-button'
 import { Button } from '@frontend/components/ui/button'
+import { EMPTY_THREAD_ID } from '@frontend/config/consts'
 import { useThreadContext } from '@frontend/context/thread'
 import { cn } from '@frontend/lib/utils'
 import { useThreadActions } from '@frontend/providers/apollo-chat-runtime'
 
 export const Thread: FC = () => {
+  const { currentThreadId } = useThreadContext()
+
+  // The composer's autoFocus covers the first mount only; landing on the
+  // new-chat view later (boot, delete, "New Thread") needs a nudge.
+  useEffect(() => {
+    if (currentThreadId === EMPTY_THREAD_ID) {
+      document
+        .querySelector<HTMLTextAreaElement>('textarea[name="input"]')
+        ?.focus()
+    }
+  }, [currentThreadId])
+
   return (
     <ThreadPrimitive.Root
       className="aui-root aui-thread-root @container flex h-full flex-col bg-white dark:bg-neutral-950"

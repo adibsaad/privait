@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useRef, useState } from 'react'
+import { ReactNode, useEffect, useState } from 'react'
 
 import { gql } from '@apollo/client'
 import { useQuery } from '@apollo/client/react'
@@ -9,7 +9,7 @@ import { EMPTY_THREAD_ID } from '@frontend/config/consts'
 import { ArchivedThread, Thread, ThreadContext } from '@frontend/context/thread'
 import { AllConversationsDocument } from '@frontend/graphql/output/graphql'
 import {
-  pickInitialThreadId,
+  isHiddenMemoryStep,
   toAuiMessageWithFiles,
 } from '@frontend/providers/chat-threads'
 
@@ -69,11 +69,6 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
   const [currentThreadId, setCurrentThreadId] = useState(EMPTY_THREAD_ID)
   const [newChatIncognito, setNewChatIncognito] = useState(false)
   const { data, loading } = useQuery(AllConversationsDocument)
-  // The boot selection runs exactly once: this effect re-runs on every
-  // AllConversations cache emission (the settle-poll's message writes, the
-  // post-send title fetch), and re-picking the first thread would yank the
-  // user out of their selected chat mid-conversation.
-  const bootstrappedRef = useRef(false)
 
   useEffect(() => {
     if (loading || !data?.conversations?.length) {
@@ -84,7 +79,9 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
     data.conversations.map(c => {
       tmpThreads.set(
         c.id,
-        c.messages.map(m => toAuiMessageWithFiles(m)),
+        c.messages
+          .filter(m => !isHiddenMemoryStep(m))
+          .map(m => toAuiMessageWithFiles(m)),
       )
     })
 
@@ -110,12 +107,8 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
           title: c.title,
         })),
     )
-    // Never restore the app into an archived chat: pick the first live one,
-    // or start on the new-chat page — once, at boot.
-    if (!bootstrappedRef.current) {
-      bootstrappedRef.current = true
-      setCurrentThreadId(pickInitialThreadId(data.conversations))
-    }
+    // Boot stays on the new-chat page: `currentThreadId` is EMPTY_THREAD_ID
+    // by default and nothing here re-selects a conversation (0034).
   }, [loading, data])
 
   if (loading) {

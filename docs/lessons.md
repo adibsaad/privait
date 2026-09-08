@@ -41,3 +41,6 @@
   (live no-op). Same trap for test mocks: a prompt's worked example (`#7`)
   leaked into a mock's id scan and produced a misleading "ignored" — scope
   test-mock parsing to the actual payload section it should read.
+- Git discipline: commit when work is verified, but NEVER push unless the
+  human explicitly asks for it in the current request — "make a PR" or an
+  earlier push approval does not carry over to later commits.
