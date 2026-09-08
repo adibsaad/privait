@@ -1,4 +1,4 @@
-import { useEffect, type FC } from 'react'
+import { useEffect, useState, type FC } from 'react'
 
 import {
   ActionBarPrimitive,
@@ -189,28 +189,49 @@ const Composer: FC = () => {
 /** Incognito birth for a brand-new chat: shown on the empty view only —
  * existing chats flip the flag from the thread menu. The first turn reads
  * and writes no memories, and the chat stays out of transcript search. */
-const NewChatIncognitoToggle: FC = () => {
-  const { newChatIncognito, setNewChatIncognito } = useThreadContext()
+export const IncognitoToggle: FC = () => {
+  const { currentThreadId, threadList, newChatIncognito, setNewChatIncognito } =
+    useThreadContext()
+  const { setThreadIncognito } = useThreadActions()
+
+  // New chats: the toggle sets the pending birth flag. Existing chats: it
+  // flips the persisted flag through the same action the sidebar uses, so
+  // the badge, the menu, and this button always agree. The pressed state is
+  // optimistic (the threadList rebuild lags the cache write by a render),
+  // re-synced whenever the persisted value or the thread changes.
+  const isNewChat = currentThreadId === EMPTY_THREAD_ID
+  const persisted =
+    threadList.find(t => t.id === currentThreadId)?.incognito ?? false
+  const [override, overrideSet] = useState<boolean | null>(null)
+  useEffect(() => overrideSet(null), [currentThreadId, persisted])
+  const incognito = isNewChat ? newChatIncognito : (override ?? persisted)
+
   return (
-    <AuiIf condition={s => s.thread.isEmpty}>
-      <TooltipIconButton
-        tooltip="Incognito — no memories, no history search"
-        side="bottom"
-        type="button"
-        variant="ghost"
-        size="icon"
-        className={cn(
-          'size-8 rounded-full',
-          newChatIncognito &&
-            'bg-neutral-900 text-white dark:bg-white dark:text-neutral-950',
-        )}
-        aria-pressed={newChatIncognito}
-        aria-label="Start this chat incognito"
-        onClick={() => setNewChatIncognito(!newChatIncognito)}
-      >
-        <EyeOffIcon className="size-4" />
-      </TooltipIconButton>
-    </AuiIf>
+    <TooltipIconButton
+      tooltip="Incognito — no memories, no history search"
+      side="bottom"
+      type="button"
+      variant="ghost"
+      size="icon"
+      className={cn(
+        'size-8 rounded-full',
+        incognito &&
+          'bg-neutral-900 text-white dark:bg-white dark:text-neutral-950',
+      )}
+      aria-pressed={incognito}
+      aria-label="Toggle incognito for this chat"
+      onClick={() => {
+        if (isNewChat) {
+          setNewChatIncognito(!newChatIncognito)
+          return
+        }
+        overrideSet(!incognito)
+        console.log('[debug-toggle-click]', currentThreadId, !incognito)
+        setThreadIncognito(currentThreadId, !incognito)
+      }}
+    >
+      <EyeOffIcon className="size-4" />
+    </TooltipIconButton>
   )
 }
 
@@ -219,7 +240,7 @@ const ComposerAction: FC = () => {
     <div className="aui-composer-action-wrapper relative mx-2 mb-2 flex items-center justify-between">
       <div className="flex items-center gap-1">
         <ComposerAddAttachment />
-        <NewChatIncognitoToggle />
+        <IncognitoToggle />
       </div>
       <div className="flex items-center gap-1">
         <AuiIf condition={s => !s.thread.isRunning}>

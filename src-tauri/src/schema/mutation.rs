@@ -769,12 +769,14 @@ impl Mutation {
         conversation_id: i64,
         incognito: bool,
     ) -> async_graphql::Result<bool> {
+        eprintln!("[debug-incognito] resolver: conv={conversation_id} incognito={incognito}");
         let db = ctx.data::<Db>()?;
         let conn = db.get()?;
         conn.execute(
             "UPDATE conversations SET incognito = ?1 WHERE id = ?2",
             rusqlite::params![incognito as i64, conversation_id],
         )?;
+        eprintln!("[debug-incognito] wrote rows={}", conn.changes());
         Ok(true)
     }
 }

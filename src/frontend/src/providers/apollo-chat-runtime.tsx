@@ -28,6 +28,7 @@ import {
   GetConversationDocument,
   GetConversationWithMessagesDocument,
   RenameConversationDocument,
+  SetConversationIncognitoDocument,
   StopRunDocument,
   UploadFileDocument,
 } from '@frontend/graphql/output/graphql'
@@ -165,6 +166,9 @@ export type ThreadActions = {
   rename: (threadId: string, title: string) => void
   archive: (threadId: string) => void
   remove: (threadId: string) => void
+  /** Flips a conversation's persisted incognito flag (mutation + cache
+   * sync + toast) — shared by the sidebar menu and the composer toggle. */
+  setThreadIncognito: (threadId: string, incognito: boolean) => void
   /** Conversations with a run in flight (streaming or queued). */
   runningThreadIds: ReadonlySet<string>
   /** Conversations currently receiving reasoning deltas (thinking models):
@@ -263,6 +267,7 @@ export function ApolloChatRuntimeProvider({
   const [archiveConversationMut] = useMutation(ArchiveConversationDocument)
   const [uploadFileMut] = useMutation(UploadFileDocument)
   const [stopRunMut] = useMutation(StopRunDocument)
+  const [setIncognitoMut] = useMutation(SetConversationIncognitoDocument)
   const [loadConversation] = useLazyQuery(GetConversationDocument)
   const apolloClient = useApolloClient()
   const { adapter, takeFiles } = useComposerAttachmentAdapter()
@@ -289,6 +294,36 @@ export function ApolloChatRuntimeProvider({
         ),
       },
     })
+  }
+
+  // The sidebar menu and the composer toggle both flip the persisted
+  // incognito flag through here: one mutation, one cache write, one toast.
+  const setThreadIncognitoState = (
+    conversationId: string,
+    incognito: boolean,
+  ) => {
+    console.log('[debug-incognito-action]', conversationId, incognito)
+    setIncognitoMut({
+      variables: { conversationId: Number(conversationId), incognito },
+    })
+    const cached = apolloClient.readQuery({ query: AllConversationsDocument })
+    if (cached?.conversations) {
+      apolloClient.writeQuery({
+        query: AllConversationsDocument,
+        data: {
+          conversations: applyConversationCacheUpdate(
+            cached.conversations,
+            conversationId,
+            { incognito },
+          ),
+        },
+      })
+    }
+    toast(
+      incognito
+        ? 'Incognito on — this chat reads and writes no memories'
+        : 'Incognito off — this chat uses memories again',
+    )
   }
 
   // threads
@@ -803,6 +838,9 @@ export function ApolloChatRuntimeProvider({
         setCurrentThreadId(EMPTY_THREAD_ID)
         navigate('/chat')
       }
+    },
+    setThreadIncognito: (threadId, incognito) => {
+      setThreadIncognitoState(threadId, incognito)
     },
     remove: threadId => {
       setThreadList(prev => prev.filter(t => t.id !== threadId))

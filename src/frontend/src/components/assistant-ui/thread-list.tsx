@@ -2,7 +2,7 @@ import { FC, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import { gql } from '@apollo/client'
-import { useApolloClient, useMutation, useQuery } from '@apollo/client/react'
+import { useMutation, useQuery } from '@apollo/client/react'
 import { AuiIf, ThreadListPrimitive } from '@assistant-ui/react'
 import {
   ArchiveIcon,
@@ -13,7 +13,6 @@ import {
   PlusIcon,
   TrashIcon,
 } from 'lucide-react'
-import { toast } from 'sonner'
 
 import { ProjectDialog } from '@frontend/components/project-dialog'
 import {
@@ -39,10 +38,8 @@ import {
   AllConversationsDocument,
   DeleteProjectDocument,
   ProjectsDocument,
-  SetConversationIncognitoDocument,
 } from '@frontend/graphql/output/graphql'
 import { useThreadActions } from '@frontend/providers/apollo-chat-runtime'
-import { applyConversationCacheUpdate } from '@frontend/providers/chat-threads'
 
 /**
  * Sidebar thread list, grouped by project. Plain chats live under "Chats";
@@ -269,8 +266,10 @@ const ProjectRowMenu: FC<{
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-40">
-        <DropdownMenuItem onSelect={onEdit}>Edit project</DropdownMenuItem>
-        <DropdownMenuItem className="text-red-500" onSelect={onDelete}>
+        <DropdownMenuItem className="gap-2.5" onSelect={onEdit}>
+          Edit project
+        </DropdownMenuItem>
+        <DropdownMenuItem className="gap-2.5 text-red-500" onSelect={onDelete}>
           Delete project
         </DropdownMenuItem>
       </DropdownMenuContent>
@@ -285,45 +284,18 @@ const ThreadRow: FC<{ thread: Thread; indent?: boolean }> = ({
   const location = useLocation()
   const { currentThreadId } = useThreadContext()
   const { runningThreadIds, ...actions } = useThreadActions()
-  const apolloClient = useApolloClient()
   const active =
     currentThreadId === thread.id &&
     (location.pathname === '/chat' || location.pathname === '/')
   const generating = runningThreadIds.has(thread.id)
   const [incognito, setIncognito] = useState(thread.incognito ?? false)
   const [deleting, deletingSet] = useState(false)
-  const [setIncognitoState] = useMutation(SetConversationIncognitoDocument)
 
-  const toggleIncognito = async () => {
+  const toggleIncognito = () => {
     const next = !incognito
     setIncognito(next)
     if (Number(thread.id)) {
-      await setIncognitoState({
-        variables: { conversationId: Number(thread.id), incognito: next },
-      })
-      // Keep the cache truthful: the row remounts on project switches and
-      // app restarts re-seed from AllConversations, so local state alone
-      // goes stale (and could strand the chat in incognito).
-      const cached = apolloClient.readQuery({
-        query: AllConversationsDocument,
-      })
-      if (cached?.conversations) {
-        apolloClient.writeQuery({
-          query: AllConversationsDocument,
-          data: {
-            conversations: applyConversationCacheUpdate(
-              cached.conversations,
-              thread.id,
-              { incognito: next },
-            ),
-          },
-        })
-      }
-      toast(
-        next
-          ? 'Incognito on — this chat reads and writes no memories'
-          : 'Incognito off — this chat uses memories again',
-      )
+      actions.setThreadIncognito(thread.id, next)
     }
   }
 
@@ -364,15 +336,21 @@ const ThreadRow: FC<{ thread: Thread; indent?: boolean }> = ({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-32">
-          <DropdownMenuItem onSelect={() => void toggleIncognito()}>
+          <DropdownMenuItem
+            className="gap-2.5"
+            onSelect={() => void toggleIncognito()}
+          >
             <EyeOffIcon className="size-4" />
             {incognito ? 'Leave incognito' : 'Incognito'}
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => actions.archive(thread.id)}>
+          <DropdownMenuItem
+            className="gap-2.5"
+            onSelect={() => actions.archive(thread.id)}
+          >
             <ArchiveIcon className="size-4" /> Archive
           </DropdownMenuItem>
           <DropdownMenuItem
-            className="text-red-500"
+            className="gap-2.5 text-red-500"
             onSelect={() => deletingSet(true)}
           >
             <TrashIcon className="size-4" /> Delete
