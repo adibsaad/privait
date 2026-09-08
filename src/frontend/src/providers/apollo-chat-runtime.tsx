@@ -318,11 +318,6 @@ export function ApolloChatRuntimeProvider({
         },
       })
     }
-    toast(
-      incognito
-        ? 'Incognito on — this chat reads and writes no memories'
-        : 'Incognito off — this chat uses memories again',
-    )
   }
 
   // threads
