@@ -137,7 +137,12 @@ const EXPECTED_DIFF = [
   // 0002 projects: the workspace container (see the projects row in
   // docs/architecture.md).
   'Conversation: + projectId: Int',
-  'Subscription: ~ conversation: (conversationId: Int, fileIds: [Int!], message: String!, projectId: Int): SubscriptionConversationResult! (was (conversationId: Int, message: String!): SubscriptionConversationResult)',
+  // 0027/0028 incognito UI parity: the persisted flag reaches the sidebar,
+  // and new chats can be born incognito from the composer.
+  'Conversation: + incognito: Boolean!',
+  'Subscription: ~ conversation: (conversationId: Int, fileIds: [Int!], incognito: Boolean, message: String!, projectId: Int): SubscriptionConversationResult! (was (conversationId: Int, message: String!): SubscriptionConversationResult)',
+  // 0031 thinking indicator: reasoning deltas are flagged on chunk payloads.
+  'ConversationMessageChunk: + reasoning: Boolean!',
   'Mutation: + addProjectKnowledge: (fileIds: [Int!]!, projectId: Int!): MutationAddProjectKnowledgeResult!',
   'Mutation: + createProject: (instructions: String, name: String!): MutationCreateProjectResult!',
   'Mutation: + deleteProject: (projectId: Int!): MutationDeleteProjectResult!',

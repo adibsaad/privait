@@ -13,7 +13,6 @@ import {
   PlusIcon,
   TrashIcon,
 } from 'lucide-react'
-import { toast } from 'sonner'
 
 import { ProjectDialog } from '@frontend/components/project-dialog'
 import {
@@ -39,7 +38,6 @@ import {
   AllConversationsDocument,
   DeleteProjectDocument,
   ProjectsDocument,
-  SetConversationIncognitoDocument,
 } from '@frontend/graphql/output/graphql'
 import { useThreadActions } from '@frontend/providers/apollo-chat-runtime'
 
@@ -167,7 +165,7 @@ export const ThreadList: FC = () => {
                 ))}
                 {allChats.length === 0 && (
                   <p className="text-muted-foreground px-3 pb-1 pl-9 text-xs">
-                    No chats yet — open the project to start one
+                    No chats yet
                   </p>
                 )}
                 {allChats.length > 5 && (
@@ -198,6 +196,9 @@ export const ThreadList: FC = () => {
           {plainThreads.map(thread => (
             <ThreadRow key={thread.id} thread={thread} />
           ))}
+          {plainThreads.length === 0 && (
+            <p className="text-muted-foreground px-3 text-xs">No chats yet</p>
+          )}
         </div>
       </AuiIf>
 
@@ -268,8 +269,10 @@ const ProjectRowMenu: FC<{
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-40">
-        <DropdownMenuItem onSelect={onEdit}>Edit project</DropdownMenuItem>
-        <DropdownMenuItem className="text-red-500" onSelect={onDelete}>
+        <DropdownMenuItem className="gap-2.5" onSelect={onEdit}>
+          Edit project
+        </DropdownMenuItem>
+        <DropdownMenuItem className="gap-2.5 text-red-500" onSelect={onDelete}>
           Delete project
         </DropdownMenuItem>
       </DropdownMenuContent>
@@ -288,22 +291,19 @@ const ThreadRow: FC<{ thread: Thread; indent?: boolean }> = ({
     currentThreadId === thread.id &&
     (location.pathname === '/chat' || location.pathname === '/')
   const generating = runningThreadIds.has(thread.id)
-  const [incognito, setIncognito] = useState(false)
   const [deleting, deletingSet] = useState(false)
-  const [setIncognitoState] = useMutation(SetConversationIncognitoDocument)
+  // One source of truth for the incognito flag: the Apollo cache (reactive
+  // to writes from every surface — this badge, the composer, the ⋯ menu).
+  const { data: conversationsData } = useQuery(AllConversationsDocument, {
+    fetchPolicy: 'cache-only',
+  })
+  const incognito =
+    conversationsData?.conversations.find(c => c.id === thread.id)?.incognito ??
+    false
 
-  const toggleIncognito = async () => {
-    const next = !incognito
-    setIncognito(next)
+  const toggleIncognito = () => {
     if (Number(thread.id)) {
-      await setIncognitoState({
-        variables: { conversationId: Number(thread.id), incognito: next },
-      })
-      toast(
-        next
-          ? 'Incognito on — this chat reads and writes no memories'
-          : 'Incognito off — this chat uses memories again',
-      )
+      actions.setThreadIncognito(thread.id, !incognito)
     }
   }
 
@@ -344,15 +344,21 @@ const ThreadRow: FC<{ thread: Thread; indent?: boolean }> = ({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-32">
-          <DropdownMenuItem onSelect={() => void toggleIncognito()}>
+          <DropdownMenuItem
+            className="gap-2.5"
+            onSelect={() => void toggleIncognito()}
+          >
             <EyeOffIcon className="size-4" />
             {incognito ? 'Leave incognito' : 'Incognito'}
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => actions.archive(thread.id)}>
+          <DropdownMenuItem
+            className="gap-2.5"
+            onSelect={() => actions.archive(thread.id)}
+          >
             <ArchiveIcon className="size-4" /> Archive
           </DropdownMenuItem>
           <DropdownMenuItem
-            className="text-red-500"
+            className="gap-2.5 text-red-500"
             onSelect={() => deletingSet(true)}
           >
             <TrashIcon className="size-4" /> Delete

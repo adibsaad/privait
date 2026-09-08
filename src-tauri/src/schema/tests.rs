@@ -65,6 +65,136 @@ pub(crate) mod chat_tests {
     }
 
     #[tokio::test]
+    async fn insert_conversation_persists_the_incognito_flag() {
+        let db = test_db();
+        let conn = db.get().unwrap();
+        let private = insert_conversation(&conn, "private", None, true).unwrap();
+        let public = insert_conversation(&conn, "public", None, false).unwrap();
+
+        let flags: Vec<(i64, i64)> = conn
+            .prepare("SELECT id, incognito FROM conversations WHERE id IN (?1, ?2) ORDER BY id")
+            .unwrap()
+            .query_map(rusqlite::params![private, public], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(flags, vec![(private, 1), (public, 0)]);
+    }
+
+    /// A reasoning model: the pump coalesces the reasoning phase into a single
+    /// `reasoning: true` chunk, keeps it out of the persisted reply, and the
+    /// client's chunk payload carries the flag for the "Thinking…" indicator.
+    #[tokio::test]
+    async fn subscription_signals_reasoning_to_the_client() {
+        let db = test_db();
+        {
+            let conn = db.get().unwrap();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
+            db::set_setting(&conn, "provider.baseUrl", &base_url).unwrap();
+            db::set_setting(&conn, "provider.model", "test-model").unwrap();
+
+            use axum::response::IntoResponse;
+            let app = axum::Router::new().route(
+                "/v1/chat/completions",
+                axum::routing::post(|| async {
+                    let frames = vec![
+                    "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"hmm\"}}]}\n\n",
+                    "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"hmm more\"}}]}\n\n",
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"visible\"}}]}\n\n",
+                    "data: [DONE]\n\n",
+                ];
+                    let body =
+                        futures_util::stream::iter(frames.into_iter().map(Ok::<_, std::io::Error>));
+                    (
+                        [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
+                        axum::body::Body::from_stream(body),
+                    )
+                        .into_response()
+                }),
+            );
+            tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        }
+
+        let schema = schema_with(db.clone());
+        // Same subscription as subscription_request, plus the reasoning field.
+        let request = async_graphql::Request::new(
+        r#"
+            subscription ConversationSub($conversationId: Int, $message: String!, $fileIds: [Int!]) {
+                conversation(conversationId: $conversationId, message: $message, fileIds: $fileIds) {
+                    __typename
+                    ... on SubscriptionConversationSuccess {
+                        data {
+                            conversationId
+                            previousMessageId
+                            messageId
+                            messageChunk
+                            done
+                            reasoning
+                        }
+                    }
+                    ... on Error {
+                        message
+                    }
+                }
+            }
+        "#,
+    )
+    .variables(async_graphql::Variables::from_value(async_graphql::value!({
+        "message": "hi",
+        "conversationId": null,
+        "fileIds": [],
+    })));
+        let mut stream = schema.execute_stream(request);
+
+        let mut seen: Vec<(bool, String, bool)> = Vec::new();
+        while let Some(response) = stream.next().await {
+            let payload = payload_item(response);
+            let item = &payload["conversation"];
+            match item["__typename"].as_str() {
+                Some("SubscriptionConversationSuccess") => {
+                    let data = &item["data"];
+                    seen.push((
+                        data["reasoning"].as_bool().unwrap_or(false),
+                        data["messageChunk"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                        data["done"].as_bool().unwrap_or(false),
+                    ));
+                    if data["done"].as_bool() == Some(true) {
+                        break;
+                    }
+                }
+                other => panic!("unexpected item: {other:?} {item:?}"),
+            }
+        }
+
+        assert_eq!(
+            seen,
+            vec![
+                (true, String::new(), false),
+                (false, "visible".to_string(), false),
+                (false, String::new(), true),
+            ],
+            "one coalesced reasoning chunk, then content, then done"
+        );
+
+        // Reasoning text never reaches the persisted reply.
+        let conn = db.get().unwrap();
+        let content: String = conn
+            .query_row(
+                "SELECT content FROM messages WHERE role = 'ASSISTANT'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(content, "visible");
+    }
+
+    #[tokio::test]
     async fn subscription_streams_chunks_and_persists_messages() {
         let db = test_db();
         {
@@ -2341,6 +2471,32 @@ pub(crate) mod mutation_tests {
         assert_eq!(
             serde_json::to_value(&response.data).unwrap()["setConversationIncognito"],
             json!(true)
+        );
+
+        // The persisted flag round-trips to the sidebar: the badge and the
+        // ⋯ menu state read this field, so it must survive restarts.
+        let response = schema
+            .execute("{ conversations { id incognito } }")
+            .await
+            .into_result()
+            .unwrap();
+        let conversations = serde_json::to_value(&response.data).unwrap()["conversations"]
+            .as_array()
+            .unwrap()
+            .clone();
+        let incognito_by_id: Vec<(i64, bool)> = conversations
+            .iter()
+            .map(|c| {
+                (
+                    c["id"].as_str().unwrap().parse::<i64>().unwrap(),
+                    c["incognito"].as_bool().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            incognito_by_id,
+            vec![(9, true), (10, false)],
+            "incognito flag reaches the Conversation query"
         );
 
         // Memory reads skip incognito chats entirely.

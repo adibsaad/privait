@@ -184,6 +184,17 @@ async fn run_distillation(
         conversation_id,
     )
     .await;
+    // Metadata only (privacy: no memory or message content in logs) —
+    // protocol drift is diagnosable from counts alone.
+    match &outcome {
+        Ok(counts) => eprintln!(
+            "distillation for conversation {conversation_id}: {} added, {} updated, {} removed, {} ignored",
+            counts.added, counts.updated, counts.deleted, counts.ignored
+        ),
+        Err(err) => eprintln!(
+            "distillation for conversation {conversation_id} failed: {err}"
+        ),
+    }
     crate::memories::finish_tool_message(&deps.db, tool_message_id, &outcome)?;
     outcome.map(|_| ())
 }

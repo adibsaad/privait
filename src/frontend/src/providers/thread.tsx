@@ -9,7 +9,7 @@ import { EMPTY_THREAD_ID } from '@frontend/config/consts'
 import { ArchivedThread, Thread, ThreadContext } from '@frontend/context/thread'
 import { AllConversationsDocument } from '@frontend/graphql/output/graphql'
 import {
-  pickInitialThreadId,
+  isHiddenMemoryStep,
   toAuiMessageWithFiles,
 } from '@frontend/providers/chat-threads'
 
@@ -21,6 +21,7 @@ gql(/* GraphQL */ `
       title
       archived
       projectId
+      incognito
       updatedAt
       messages {
         __typename
@@ -66,6 +67,7 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
     new Map(),
   )
   const [currentThreadId, setCurrentThreadId] = useState(EMPTY_THREAD_ID)
+  const [newChatIncognito, setNewChatIncognito] = useState(false)
   const { data, loading } = useQuery(AllConversationsDocument)
 
   useEffect(() => {
@@ -77,7 +79,9 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
     data.conversations.map(c => {
       tmpThreads.set(
         c.id,
-        c.messages.map(m => toAuiMessageWithFiles(m)),
+        c.messages
+          .filter(m => !isHiddenMemoryStep(m))
+          .map(m => toAuiMessageWithFiles(m)),
       )
     })
 
@@ -90,6 +94,7 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
           status: 'regular' as const,
           title: c.title,
           projectId: c.projectId ?? null,
+          incognito: c.incognito,
           updatedAt: c.updatedAt,
         })),
     )
@@ -102,9 +107,8 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
           title: c.title,
         })),
     )
-    // Never restore the app into an archived chat: pick the first live one,
-    // or start on the new-chat page.
-    setCurrentThreadId(pickInitialThreadId(data.conversations))
+    // Boot stays on the new-chat page: `currentThreadId` is EMPTY_THREAD_ID
+    // by default and nothing here re-selects a conversation (0034).
   }, [loading, data])
 
   if (loading) {
@@ -122,6 +126,8 @@ export function ThreadProvider({ children }: { children: ReactNode }) {
         setArchivedThreadList,
         threads,
         setThreads,
+        newChatIncognito,
+        setNewChatIncognito,
       }}
     >
       {children}

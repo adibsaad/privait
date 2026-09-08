@@ -114,7 +114,7 @@ impl GqlProject {
         let db = ctx.data::<Db>()?;
         let conn = db.get()?;
         let mut stmt = conn.prepare(
-            "SELECT id, title, archived, project_id, updated_at FROM conversations
+            "SELECT id, title, archived, project_id, incognito, updated_at FROM conversations
              WHERE project_id = ?1 AND archived = 0
              ORDER BY updated_at DESC, id DESC",
         )?;
@@ -125,7 +125,8 @@ impl GqlProject {
                     title: row.get(1)?,
                     archived: row.get(2)?,
                     project_id: row.get(3)?,
-                    updated_at: row.get(4)?,
+                    incognito: row.get(4)?,
+                    updated_at: row.get(5)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;

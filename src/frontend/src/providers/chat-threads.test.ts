@@ -9,7 +9,7 @@ import {
   applyConversationCacheUpdate,
   assistantChunkMessage,
   dropNewThreadBucket,
-  pickInitialThreadId,
+  isHiddenMemoryStep,
   reconcileFirstChunk,
   reconcileThreadList,
   userMessage,
@@ -139,6 +139,46 @@ describe('appendAssistantChunk', () => {
 
     expect(appendAssistantChunk(threads, '7', '100', 'He')).toBe(threads)
   })
+
+  it('survives a settle-poll merge that landed server rows mid-stream', () => {
+    // Merges re-shape streamed messages to the server's string content;
+    // chunks arriving afterwards must extend that text, not crash on it.
+    const threads = new Map([
+      [
+        '7',
+        [
+          userMessage('99', 'hello'),
+          { id: '100', role: 'assistant' as const, content: '' },
+        ],
+      ],
+    ])
+
+    const next = appendAssistantChunk(threads, '7', '100', 'He')
+
+    const messages = next.get('7') ?? []
+    expect(messages[messages.length - 1]).toEqual(
+      assistantChunkMessage('100', 'He'),
+    )
+  })
+
+  it('extends merged server text instead of dropping it', () => {
+    const threads = new Map([
+      [
+        '7',
+        [
+          userMessage('99', 'hello'),
+          { id: '100', role: 'assistant' as const, content: 'Hel' },
+        ],
+      ],
+    ])
+
+    const next = appendAssistantChunk(threads, '7', '100', 'lo')
+
+    const messages = next.get('7') ?? []
+    expect(messages[messages.length - 1]).toEqual(
+      assistantChunkMessage('100', 'Hello'),
+    )
+  })
 })
 
 describe('dropNewThreadBucket', () => {
@@ -172,6 +212,7 @@ describe('withOptimisticThread', () => {
       id: EMPTY_THREAD_ID,
       status: 'regular' as const,
       title: '',
+      incognito: false,
     })
     expect(next[1]).toEqual({
       id: '7',
@@ -184,6 +225,12 @@ describe('withOptimisticThread', () => {
     const seeded = withOptimisticThread([])
 
     expect(withOptimisticThread(seeded)).toBe(seeded)
+  })
+
+  it('marks a chat born incognito so the badge shows immediately', () => {
+    const next = withOptimisticThread([], null, true)
+
+    expect(next[0].incognito).toBe(true)
   })
 })
 
@@ -219,6 +266,22 @@ describe('reconcileThreadList', () => {
 
     expect(next[0].id).toBe('9')
     expect(next).toHaveLength(2)
+  })
+
+  it('carries the incognito birth onto the real conversation', () => {
+    const list: Thread[] = [
+      {
+        id: EMPTY_THREAD_ID,
+        status: 'regular' as const,
+        title: '',
+        incognito: true,
+      },
+      { id: '7', status: 'regular' as const, title: 'old' },
+    ]
+
+    const next = reconcileThreadList(list, '9')
+
+    expect(next[0]).toMatchObject({ id: '9', incognito: true })
   })
 })
 
@@ -290,23 +353,18 @@ describe('userMessage attachments', () => {
   })
 })
 
-describe('pickInitialThreadId', () => {
-  it('selects the first non-archived conversation', () => {
-    const conversations = [
-      { id: '1', archived: true },
-      { id: '2', archived: false },
-      { id: '3', archived: false },
-    ]
-    expect(pickInitialThreadId(conversations)).toBe('2')
-  })
-
-  it('never restores the app into an archived chat', () => {
-    const conversations = [{ id: '1', archived: true }]
-    expect(pickInitialThreadId(conversations)).toBe(EMPTY_THREAD_ID)
-  })
-
-  it('starts on the new-chat page when history is empty', () => {
-    expect(pickInitialThreadId([])).toBe(EMPTY_THREAD_ID)
+describe('isHiddenMemoryStep', () => {
+  it('hides only the RUNNING distillation row', () => {
+    expect(
+      isHiddenMemoryStep({ toolName: 'update_memories', toolState: 'RUNNING' }),
+    ).toBe(true)
+    expect(
+      isHiddenMemoryStep({ toolName: 'update_memories', toolState: 'DONE' }),
+    ).toBe(false)
+    expect(
+      isHiddenMemoryStep({ toolName: 'update_memories', toolState: 'ERROR' }),
+    ).toBe(false)
+    expect(isHiddenMemoryStep({ toolName: null, toolState: null })).toBe(false)
   })
 })
 

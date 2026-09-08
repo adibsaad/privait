@@ -2,6 +2,7 @@
 
 | Doc                                | What's in it                                                                                                                         |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| [glossary.md](glossary.md)         | The domain vocabulary — one shared meaning per term, with the boundaries that matter.                                                |
 | [architecture.md](architecture.md) | How the system works — the pieces, how data flows, where your data lives, and why key decisions were made. No code reading required. |
 | [vision.md](vision.md)             | Mission, principles, product pillars, and what Privait is not.                                                                       |
 | [roadmap.md](roadmap.md)           | Architecture direction, phased plan, and the decisions log.                                                                          |

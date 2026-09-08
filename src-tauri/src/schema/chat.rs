@@ -40,11 +40,13 @@ impl MessageRole {
 /// A persisted conversation. `archived` is thread-sidebar state (rename and
 /// archive are now persisted — they were client-only in the web app).
 /// `project_id` scopes the chat to a project (None = plain chat).
+/// `incognito` keeps the sidebar's badge truthful across restarts.
 pub struct GqlConversation {
     pub id: i64,
     pub title: String,
     pub archived: bool,
     pub project_id: Option<i64>,
+    pub incognito: bool,
     pub updated_at: String,
 }
 
@@ -65,6 +67,10 @@ impl GqlConversation {
     #[graphql(name = "projectId")]
     async fn project_id(&self) -> Option<i64> {
         self.project_id
+    }
+
+    async fn incognito(&self) -> bool {
+        self.incognito
     }
 
     #[graphql(name = "updatedAt")]
@@ -142,6 +148,9 @@ pub struct ConversationMessageChunk {
     pub message_id: ID,
     pub message_chunk: String,
     pub done: Option<bool>,
+    /// True while the provider streams reasoning deltas (thinking models):
+    /// the UI shows a "Thinking…" state instead of a generic spinner.
+    pub reasoning: bool,
 }
 
 #[derive(Debug, SimpleObject)]
@@ -252,6 +261,24 @@ fn insert_message(
     Ok(conn.last_insert_rowid())
 }
 
+/// Inserts a conversation row. `incognito` marks chats born private — the
+/// flag is persisted (survives restarts) and enforced by every memory/
+/// search path, not trusted from the client per turn. Returns the row id.
+pub fn insert_conversation(
+    conn: &Connection,
+    title: &str,
+    project_id: Option<i64>,
+    incognito: bool,
+) -> rusqlite::Result<i64> {
+    let now = now_iso();
+    conn.execute(
+        "INSERT INTO conversations (title, created_at, updated_at, project_id, incognito)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![title, now, now, project_id, incognito],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
 /// Inserts a tool-call step row (role SYSTEM + tool columns): the chat
 /// history's record of a background action, e.g. the memory distillation.
 /// Returns the row id so the background job can update its state.
@@ -292,6 +319,9 @@ impl Subscription {
     /// Starts (or continues) a chat turn. `conversationId` omitted creates a
     /// conversation; the new user message and an empty assistant message are
     /// persisted up front, then provider chunks stream over this subscription.
+    /// `incognito` applies only to that creation: the chat is born without
+    /// memory reads/writes and stays out of transcript search (see the
+    /// distillation skip for how the flag is enforced per turn).
     ///
     /// `fileIds` are uploads sent with this turn (the composer uploads them
     /// right before subscribing). They are attached to the user message here;
@@ -313,6 +343,7 @@ impl Subscription {
         message: String,
         file_ids: Option<Vec<i64>>,
         project_id: Option<i64>,
+        incognito: Option<bool>,
     ) -> async_graphql::Result<ReceiverStream<SubscriptionConversationResult>> {
         let db = ctx.data::<Db>()?.clone();
         let conn = db.get()?;
@@ -362,19 +393,14 @@ impl Subscription {
                     }
                     None => None,
                 };
-                let now = now_iso();
                 // A file-only first message titles the thread from its first
                 // file; otherwise from the prompt.
                 let title = match message.trim().is_empty() && has_files {
                     true => conversation_title(&attached_files[0].original_name),
                     false => conversation_title(&message),
                 };
-                conn.execute(
-                    "INSERT INTO conversations (title, created_at, updated_at, project_id)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    params![title, now, now, scoped_project],
-                )?;
-                conn.last_insert_rowid()
+                let incognito = incognito.unwrap_or(false);
+                insert_conversation(&conn, &title, scoped_project, incognito)?
             }
         };
 
@@ -644,6 +670,9 @@ impl Subscription {
 
             if let Some((mut stream, first)) = opened {
                 let mut pending_first = Some(first);
+                // The UI shows "Thinking…" while reasoning deltas flow; one
+                // transition chunk is enough (skip the rest of the phase).
+                let mut reasoning_in_flight = false;
                 loop {
                     let item = match pending_first.take() {
                         Some(item) => item,
@@ -666,7 +695,24 @@ impl Subscription {
                     }
 
                     match item {
-                        Some(Ok(chunk)) => {
+                        Some(Ok(delta)) => {
+                            let (chunk, reasoning) = match delta {
+                                crate::provider::MessageDelta::Content(text) => (text, false),
+                                crate::provider::MessageDelta::Reasoning(_) => {
+                                    (String::new(), true)
+                                }
+                            };
+                            if reasoning {
+                                // Coalesce the reasoning phase into a single
+                                // signal; the transition back to content
+                                // clears the indicator frontend-side.
+                                if reasoning_in_flight {
+                                    continue;
+                                }
+                                reasoning_in_flight = true;
+                            } else {
+                                reasoning_in_flight = false;
+                            }
                             let emitted = tx
                                 .send(SubscriptionConversationResult::SubscriptionConversationSuccess(
                                     SubscriptionConversationSuccess {
@@ -676,6 +722,7 @@ impl Subscription {
                                             message_id: ID(assistant_message_id.to_string()),
                                             message_chunk: chunk.clone(),
                                             done: Some(false),
+                                            reasoning,
                                         },
                                     },
                                 ))
@@ -724,6 +771,7 @@ impl Subscription {
                                         message_id: ID(assistant_message_id.to_string()),
                                         message_chunk: String::new(),
                                         done: Some(true),
+                                        reasoning: false,
                                     },
                                 },
                             ),

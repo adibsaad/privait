@@ -50,4 +50,4 @@ Journaling is the memory layer, not the whole product. What you write in the mor
 - Not an agent that acts opaquely. Capability without inspectability is a privacy violation with extra steps; tools are permissioned, local, and auditable.
 - Not multi-user. No accounts, no collaboration mode, no team features.
 
-How the system works is described in [architecture.md](architecture.md); how we work is described in [agents-guide.md](agents-guide.md); architecture direction, roadmap, and open questions live in [roadmap.md](roadmap.md).
+The domain vocabulary lives in [glossary.md](glossary.md); how the system works is described in [architecture.md](architecture.md); how we work is described in [agents-guide.md](agents-guide.md); architecture direction, roadmap, and open questions live in [roadmap.md](roadmap.md).

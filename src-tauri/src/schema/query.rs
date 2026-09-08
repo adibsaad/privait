@@ -39,7 +39,8 @@ impl Query {
         let conn = db.get()?;
 
         let mut stmt = conn.prepare(
-            "SELECT id, title, archived, project_id, updated_at FROM conversations ORDER BY id ASC",
+            "SELECT id, title, archived, project_id, incognito, updated_at
+             FROM conversations ORDER BY id ASC",
         )?;
         let rows = stmt
             .query_map([], |row| {
@@ -48,7 +49,8 @@ impl Query {
                     title: row.get(1)?,
                     archived: row.get::<_, i64>(2)? != 0,
                     project_id: row.get(3)?,
-                    updated_at: row.get(4)?,
+                    incognito: row.get::<_, i64>(4)? != 0,
+                    updated_at: row.get(5)?,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -66,7 +68,8 @@ impl Query {
 
         Ok(conn
             .query_row(
-                "SELECT id, title, archived, project_id, updated_at FROM conversations WHERE id = ?1",
+                "SELECT id, title, archived, project_id, incognito, updated_at
+                 FROM conversations WHERE id = ?1",
                 [conversation_id],
                 |row| {
                     Ok(GqlConversation {
@@ -74,7 +77,8 @@ impl Query {
                         title: row.get(1)?,
                         archived: row.get::<_, i64>(2)? != 0,
                         project_id: row.get(3)?,
-                        updated_at: row.get(4)?,
+                        incognito: row.get::<_, i64>(4)? != 0,
+                        updated_at: row.get(5)?,
                     })
                 },
             )

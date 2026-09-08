@@ -70,11 +70,19 @@ export function assistantChunkMessage(
 }
 
 function textOf(message: ThreadMessageLike): string {
-  const part = message.content[0]
+  // Content is array-shaped while a message streams (assistantChunkMessage)
+  // but string-shaped once a settle-poll merge lands server rows
+  // (toAuiMessage) — both shapes interleave on the same thread, so both
+  // must round-trip losslessly.
+  const content = message.content
+  if (typeof content === 'string') {
+    return content
+  }
+  const part = content[0]
   if (typeof part === 'string') {
     return part
   }
-  return 'text' in part ? part.text : ''
+  return part && 'text' in part ? (part.text ?? '') : ''
 }
 
 /**
@@ -173,30 +181,38 @@ export function dropNewThreadBucket(threads: ThreadsMap): ThreadsMap {
  * Optimistically shows the in-progress new chat in the sidebar (selected,
  * fallback title) the moment the first message is sent — before the backend
  * has created the conversation. A chat opened inside a project keeps the
- * group while it's still optimistic.
+ * group while it's still optimistic; an incognito birth carries the badge.
  */
 export function withOptimisticThread(
   threadList: Thread[],
   projectId: number | null = null,
+  incognito = false,
 ): Thread[] {
   if (threadList.some(t => t.id === EMPTY_THREAD_ID)) {
     return threadList
   }
   return [
-    { id: EMPTY_THREAD_ID, status: 'regular', title: '', projectId },
+    {
+      id: EMPTY_THREAD_ID,
+      status: 'regular',
+      title: '',
+      projectId,
+      incognito,
+    },
     ...threadList,
   ]
 }
 
 /**
  * Swaps the optimistic sidebar entry for the real conversation once its id
- * arrives with the first streamed chunk. The project assignment carries
- * over so the chat stays in its group.
+ * arrives with the first streamed chunk. The project assignment and incognito
+ * birth carry over so the chat stays in its group with its badge.
  */
 export function reconcileThreadList(
   threadList: Thread[],
   threadId: string,
 ): Thread[] {
+  const pending = threadList.find(t => t.id === EMPTY_THREAD_ID)
   const withoutPending = threadList.filter(t => t.id !== EMPTY_THREAD_ID)
   if (withoutPending.some(t => t.id === threadId)) {
     if (withoutPending.length === threadList.length) {
@@ -204,10 +220,14 @@ export function reconcileThreadList(
     }
     return withoutPending
   }
-  const projectId =
-    threadList.find(t => t.id === EMPTY_THREAD_ID)?.projectId ?? null
   return [
-    { id: threadId, status: 'regular', title: '', projectId },
+    {
+      id: threadId,
+      status: 'regular',
+      title: '',
+      projectId: pending?.projectId ?? null,
+      incognito: pending?.incognito,
+    },
     ...withoutPending,
   ]
 }
@@ -230,6 +250,17 @@ export function toAuiMessage(m: {
     content: m.content,
     role: graphqlRoleToAuiRole[m.role],
   }
+}
+
+/** True for the memory distillation's RUNNING row — hidden from rendering
+ * (most turns change nothing; a pending "Updating user memories…" step
+ * implies the opposite). The row stays in the data: it drives the
+ * settle-poll and is the worker's settlement target. */
+export function isHiddenMemoryStep(m: {
+  toolName?: string | null
+  toolState?: string | null
+}): boolean {
+  return m.toolName === 'update_memories' && m.toolState === 'RUNNING'
 }
 
 /** Persisted message → runtime message, mapping tool-call steps to subtle
@@ -287,21 +318,12 @@ export type CachedConversation = {
   archived: boolean
   title: string
   projectId?: number | null
-}
-
-/**
- * Boot selection: never restore the app into an archived chat — pick the
- * first live conversation, or start on the new-chat page.
- */
-export function pickInitialThreadId(
-  conversations: ReadonlyArray<{ id: string; archived: boolean }>,
-): string {
-  return conversations.find(c => !c.archived)?.id ?? EMPTY_THREAD_ID
+  incognito?: boolean
 }
 
 /** Minimal update surface for a cached conversation (apollo AllConversations). */
 export type ConversationCacheUpdate =
-  | Partial<Pick<CachedConversation, 'archived' | 'title'>>
+  | Partial<Pick<CachedConversation, 'archived' | 'title' | 'incognito'>>
   | 'remove'
 
 /**

@@ -28,6 +28,7 @@ import {
   GetConversationDocument,
   GetConversationWithMessagesDocument,
   RenameConversationDocument,
+  SetConversationIncognitoDocument,
   StopRunDocument,
   UploadFileDocument,
 } from '@frontend/graphql/output/graphql'
@@ -37,6 +38,7 @@ import {
   dropNewThreadBucket,
   reconcileFirstChunk,
   reconcileThreadList,
+  isHiddenMemoryStep,
   toAuiMessageWithFiles,
   userMessage,
   withOptimisticThread,
@@ -50,12 +52,14 @@ gql(/* GraphQL */ `
     $message: String!
     $fileIds: [Int!]
     $projectId: Int
+    $incognito: Boolean
   ) {
     conversation(
       conversationId: $conversationId
       message: $message
       fileIds: $fileIds
       projectId: $projectId
+      incognito: $incognito
     ) {
       __typename
 
@@ -66,6 +70,7 @@ gql(/* GraphQL */ `
           messageId
           messageChunk
           done
+          reasoning
         }
       }
 
@@ -151,13 +156,24 @@ export type ThreadActions = {
   switchTo: (threadId: string) => void
   switchToNew: () => void
   /** Starts a brand-new chat inside the project with the given first
-   * message (the project page's composer) and lands the user in it. */
-  sendMessageInProject: (projectId: number, text: string) => void
+   * message (the project page's composer) and lands the user in it.
+   * `incognito` births the chat without memory read/write. */
+  sendMessageInProject: (
+    projectId: number,
+    text: string,
+    incognito?: boolean,
+  ) => void
   rename: (threadId: string, title: string) => void
   archive: (threadId: string) => void
   remove: (threadId: string) => void
+  /** Flips a conversation's persisted incognito flag (mutation + cache
+   * sync + toast) — shared by the sidebar menu and the composer toggle. */
+  setThreadIncognito: (threadId: string, incognito: boolean) => void
   /** Conversations with a run in flight (streaming or queued). */
   runningThreadIds: ReadonlySet<string>
+  /** Conversations currently receiving reasoning deltas (thinking models):
+   * the thread shows a "Thinking…" state instead of a generic spinner. */
+  thinkingThreadIds: ReadonlySet<string>
 }
 
 export const ThreadActionsContext = createContext<ThreadActions | null>(null)
@@ -241,11 +257,17 @@ export function ApolloChatRuntimeProvider({
   const [runningThreadIds, runningThreadIdsSet] = useState<ReadonlySet<string>>(
     new Set(),
   )
+  // Threads currently receiving reasoning deltas (thinking models) — the
+  // thread shows a "Thinking…" state; cleared on first content or stream end.
+  const [thinkingThreadIds, thinkingThreadIdsSet] = useState<
+    ReadonlySet<string>
+  >(new Set())
   const [deleteConversationMut] = useMutation(DeleteConversationDocument)
   const [renameConversationMut] = useMutation(RenameConversationDocument)
   const [archiveConversationMut] = useMutation(ArchiveConversationDocument)
   const [uploadFileMut] = useMutation(UploadFileDocument)
   const [stopRunMut] = useMutation(StopRunDocument)
+  const [setIncognitoMut] = useMutation(SetConversationIncognitoDocument)
   const [loadConversation] = useLazyQuery(GetConversationDocument)
   const apolloClient = useApolloClient()
   const { adapter, takeFiles } = useComposerAttachmentAdapter()
@@ -274,6 +296,30 @@ export function ApolloChatRuntimeProvider({
     })
   }
 
+  // The sidebar menu and the composer toggle both flip the persisted
+  // incognito flag through here: one mutation, one cache write, one toast.
+  const setThreadIncognitoState = (
+    conversationId: string,
+    incognito: boolean,
+  ) => {
+    setIncognitoMut({
+      variables: { conversationId: Number(conversationId), incognito },
+    })
+    const cached = apolloClient.readQuery({ query: AllConversationsDocument })
+    if (cached?.conversations) {
+      apolloClient.writeQuery({
+        query: AllConversationsDocument,
+        data: {
+          conversations: applyConversationCacheUpdate(
+            cached.conversations,
+            conversationId,
+            { incognito },
+          ),
+        },
+      })
+    }
+  }
+
   // threads
   const {
     currentThreadId,
@@ -284,6 +330,8 @@ export function ApolloChatRuntimeProvider({
     setArchivedThreadList,
     threads,
     setThreads,
+    newChatIncognito,
+    setNewChatIncognito,
   } = useThreadContext()
 
   // Stream callbacks read the selection fresh (subscription callbacks can
@@ -323,6 +371,9 @@ export function ApolloChatRuntimeProvider({
     message: string
     fileIds: number[] | null
     projectId: number | null
+    /** Marks a chat born incognito (creation only — the backend ignores it
+     * when continuing an existing conversation). */
+    incognito: boolean
     optimisticThreadId: string
     attachments: UserAttachment[]
   }) => void = opts => {
@@ -336,49 +387,68 @@ export function ApolloChatRuntimeProvider({
       activeStreamsRef.current.get(streamId)?.unsubscribe()
       activeStreamsRef.current.delete(streamId)
       syncRunningThreadIds()
+      if (threadId != null) {
+        const finishedThreadId: string = threadId
+        thinkingThreadIdsSet(prev => {
+          if (!prev.has(finishedThreadId)) {
+            return prev
+          }
+          const next = new Set(prev)
+          next.delete(finishedThreadId)
+          return next
+        })
+      }
     }
 
     // The distillation step is written to history around the done chunk:
     // the RUNNING row lands with the reply, then the worker flips it to
-    // DONE/ERROR a few seconds later. Re-fetch the conversation at both
-    // moments so the step appears and settles without a reload. The merge
-    // keeps optimistic rows the user typed since the fetch snapshot.
-    const refetchForToolStep = (attempts: number) => {
-      if (attempts <= 0 || threadId == null) {
+    // DONE/ERROR — seconds later with a fast provider, minutes later with a
+    // reasoning one (the distill request goes through the same thinking
+    // model). Poll until the step actually settles instead of a fixed
+    // schedule, so the UI never shows a stale RUNNING. The merge keeps
+    // optimistic rows the user typed since the fetch snapshot.
+    const settleToolStep = (delayMs: number, deadline: number) => {
+      if (threadId == null) {
         return
       }
       const threadIdAtFetch: string = threadId
-      window.setTimeout(
-        () => {
-          apolloClient
-            .query({
-              query: GetConversationWithMessagesDocument,
-              variables: { id: Number(threadIdAtFetch) },
-              fetchPolicy: 'network-only',
+      window.setTimeout(() => {
+        const next = () => settleToolStep(Math.min(delayMs * 2, 8000), deadline)
+        if (Date.now() > deadline) {
+          return
+        }
+        apolloClient
+          .query({
+            query: GetConversationWithMessagesDocument,
+            variables: { id: Number(threadIdAtFetch) },
+            fetchPolicy: 'network-only',
+          })
+          .then(result => {
+            const conversation = result.data?.conversation
+            if (!conversation) {
+              return
+            }
+            setThreads(prev => {
+              const existing = prev.get(threadIdAtFetch) ?? []
+              const optimistic = existing.filter(m => m.id === 'temp-user')
+              const serverMessages = conversation.messages
+                .filter(m => !isHiddenMemoryStep(m))
+                .map(toAuiMessageWithFiles)
+              return new Map(prev).set(threadIdAtFetch, [
+                ...serverMessages,
+                ...optimistic,
+              ])
             })
-            .then(result => {
-              const conversation = result.data?.conversation
-              if (!conversation) {
-                return
-              }
-              setThreads(prev => {
-                const existing = prev.get(threadIdAtFetch) ?? []
-                const optimistic = existing.filter(m => m.id === 'temp-user')
-                const serverMessages = conversation.messages.map(
-                  toAuiMessageWithFiles,
-                )
-                return new Map(prev).set(threadIdAtFetch, [
-                  ...serverMessages,
-                  ...optimistic,
-                ])
-              })
-              refetchForToolStep(attempts - 1)
-            })
-            .catch(() => {})
-        },
-        attempts === 2 ? 2000 : 7000,
-      )
+            // Settled (DONE/ERROR) or never created — stop; otherwise
+            // keep waiting the worker out.
+            if (conversation.messages.some(m => m.toolState === 'RUNNING')) {
+              next()
+            }
+          })
+          .catch(next)
+      }, delayMs)
     }
+    settleToolStep(2000, Date.now() + 5 * 60_000)
 
     const handleData = (data: unknown) => {
       const conversation = (
@@ -392,6 +462,7 @@ export function ApolloChatRuntimeProvider({
               previousMessageId?: string
               messageChunk?: string
               done?: boolean | null
+              reasoning?: boolean | null
             }
           }
         }
@@ -409,7 +480,7 @@ export function ApolloChatRuntimeProvider({
         finalize()
         // Reconcile the tool-call step (memory distillation) if one is
         // expected for this turn.
-        refetchForToolStep(2)
+        settleToolStep(2000, Date.now() + 5 * 60_000)
         return
       }
 
@@ -417,8 +488,24 @@ export function ApolloChatRuntimeProvider({
       const messageId = conversation?.data?.messageId
       const previousMessageId = conversation?.data?.previousMessageId
       const chunk = conversation?.data?.messageChunk ?? ''
+      const reasoning = conversation?.data?.reasoning === true
       if (!messageId || !chunkThreadId || !previousMessageId) {
         return
+      }
+
+      // The thread's thinking state tracks reasoning deltas; the first
+      // content chunk (or the stream's end) clears it.
+      if (reasoning) {
+        thinkingThreadIdsSet(prev => new Set(prev).add(chunkThreadId))
+      } else {
+        thinkingThreadIdsSet(prev => {
+          if (!prev.has(chunkThreadId)) {
+            return prev
+          }
+          const next = new Set(prev)
+          next.delete(chunkThreadId)
+          return next
+        })
       }
 
       if (!gotFirstChunk) {
@@ -481,6 +568,7 @@ export function ApolloChatRuntimeProvider({
           message: opts.message,
           fileIds: opts.fileIds,
           projectId: opts.projectId,
+          incognito: opts.incognito,
         },
       })
       .subscribe({
@@ -509,6 +597,7 @@ export function ApolloChatRuntimeProvider({
     onSwitchToNewThread: () => {
       // Drop any optimistic messages left in the "new thread" bucket.
       setThreads(prev => dropNewThreadBucket(prev))
+      setNewChatIncognito(false)
       setCurrentThreadId(EMPTY_THREAD_ID)
       navigate('/chat')
     },
@@ -579,21 +668,16 @@ export function ApolloChatRuntimeProvider({
     },
 
     onDelete: threadId => {
-      let nextThreadId: string | null = null
-      setThreadList(prev => {
-        const newList = prev.filter(t => t.id !== threadId)
-        if (newList.length) {
-          nextThreadId = newList[0].id
-        }
-        return newList
-      })
+      setThreadList(prev => prev.filter(t => t.id !== threadId))
       setThreads(prev => {
         const next = new Map(prev)
         next.delete(threadId)
         return next
       })
+      // Deleting the selected chat lands on the new-chat page (not the
+      // next chat in the list); deleting another chat keeps the selection.
       if (currentThreadId === threadId) {
-        setCurrentThreadId(nextThreadId ?? EMPTY_THREAD_ID)
+        setCurrentThreadId(EMPTY_THREAD_ID)
       }
       syncCache(threadId, 'remove')
 
@@ -666,7 +750,7 @@ export function ApolloChatRuntimeProvider({
     // Brand-new chats also appear in the sidebar immediately, selected
     // with a fallback title, and get their real id on the first chunk.
     if (currentThreadId === EMPTY_THREAD_ID) {
-      setThreadList(prev => withOptimisticThread(prev))
+      setThreadList(prev => withOptimisticThread(prev, null, newChatIncognito))
     }
 
     // One live stream per send: parallel sends run concurrently (the
@@ -676,34 +760,41 @@ export function ApolloChatRuntimeProvider({
       message: text,
       fileIds,
       projectId: null,
+      incognito: currentThreadId === EMPTY_THREAD_ID && newChatIncognito,
       optimisticThreadId: currentThreadId,
       attachments,
     })
+    // The flag was consumed: this chat is (or is becoming) incognito, and
+    // the next chat starts non-incognito again.
+    setNewChatIncognito(false)
   }
 
   const threadActions: ThreadActions = {
     runningThreadIds,
+    thinkingThreadIds,
     switchTo: threadId => {
       setCurrentThreadId(threadId)
       navigate('/chat')
     },
     switchToNew: () => {
       setThreads(prev => dropNewThreadBucket(prev))
+      setNewChatIncognito(false)
       setCurrentThreadId(EMPTY_THREAD_ID)
       navigate('/chat')
     },
-    sendMessageInProject: (projectId, text) => {
+    sendMessageInProject: (projectId, text, incognito = false) => {
       // The project page's composer: identical optimistic flow to a
       // new-chat send, scoped to the project. The first chunk reconciles
       // the optimistic EMPTY bucket into the real conversation (keeping
       // the project group) and lands the user in the chat.
-      setThreadList(prev => withOptimisticThread(prev, projectId))
+      setThreadList(prev => withOptimisticThread(prev, projectId, incognito))
       setThreads(prev => withOptimisticUserMessage(prev, EMPTY_THREAD_ID, text))
       startStream({
         conversationId: null,
         message: text,
         fileIds: null,
         projectId,
+        incognito,
         optimisticThreadId: EMPTY_THREAD_ID,
         attachments: [],
       })
@@ -742,27 +833,27 @@ export function ApolloChatRuntimeProvider({
         navigate('/chat')
       }
     },
+    setThreadIncognito: (threadId, incognito) => {
+      setThreadIncognitoState(threadId, incognito)
+    },
     remove: threadId => {
-      let nextThreadId: string | null = null
-      setThreadList(prev => {
-        const newList = prev.filter(t => t.id !== threadId)
-        if (newList.length) {
-          nextThreadId = newList[0].id
-        }
-        return newList
-      })
+      setThreadList(prev => prev.filter(t => t.id !== threadId))
       setThreads(prev => {
         const next = new Map(prev)
         next.delete(threadId)
         return next
       })
+      // Deleting the selected chat lands on the new-chat page (not the
+      // next chat in the list); deleting another chat keeps the selection.
       if (currentThreadId === threadId) {
-        setCurrentThreadId(nextThreadId ?? EMPTY_THREAD_ID)
+        setCurrentThreadId(EMPTY_THREAD_ID)
       }
       syncCache(threadId, 'remove')
       if (Number(threadId)) {
         deleteConversationMut({
-          variables: { conversationId: Number(threadId) },
+          variables: {
+            conversationId: Number(threadId),
+          },
         })
       }
     },

@@ -9,9 +9,20 @@ use async_trait::async_trait;
 use futures_util::{Stream, StreamExt};
 use tokio::sync::mpsc;
 
-/// Stream of text chunks produced by a provider.
+/// One streamed piece of a reply. Thinking models emit reasoning deltas
+/// long before any visible text; they carry no reply text but prove the
+/// provider is alive and working.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MessageDelta {
+    /// Visible reply text.
+    Content(String),
+    /// Chain-of-thought deltas (or a bare liveness frame).
+    Reasoning(String),
+}
+
+/// Stream of pieces produced by a provider.
 pub type MessageStream =
-    std::pin::Pin<Box<dyn Stream<Item = Result<String, ProviderError>> + Send>>;
+    std::pin::Pin<Box<dyn Stream<Item = Result<MessageDelta, ProviderError>> + Send>>;
 
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
@@ -167,17 +178,23 @@ impl ChatProvider for OpenAiCompatProvider {
 }
 
 /// Maps an OpenAI-compatible SSE byte stream into a stream of content deltas.
-fn openai_content_stream<S, E>(byte_stream: S) -> impl Stream<Item = Result<String, ProviderError>>
+fn openai_content_stream<S, E>(
+    byte_stream: S,
+) -> impl Stream<Item = Result<MessageDelta, ProviderError>>
 where
     S: Stream<Item = Result<bytes::Bytes, E>> + Unpin + Send + 'static,
     E: fmt::Display + Send,
 {
     // Bounded by the consumer; chunks are tiny text deltas.
-    let (tx, rx) = mpsc::channel::<Result<String, ProviderError>>(64);
+    let (tx, rx) = mpsc::channel::<Result<MessageDelta, ProviderError>>(64);
 
     tokio::spawn(async move {
         let mut byte_stream = byte_stream;
         let mut decoder = SseDecoder::default();
+        // Providers disagree on the reasoning field's name; the stream's
+        // observed delta fields (names only — metadata, never content)
+        // make mismatches diagnosable from the engine log.
+        let mut delta_fields: std::collections::BTreeSet<String> = Default::default();
 
         'outer: loop {
             match byte_stream.next().await {
@@ -189,9 +206,23 @@ where
                             break 'outer;
                         }
 
+                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(data) {
+                            if let Some(delta) = value
+                                .get("choices")
+                                .and_then(|choices| choices.get(0))
+                                .and_then(|choice| choice.get("delta"))
+                            {
+                                if let Some(map) = delta.as_object() {
+                                    for key in map.keys() {
+                                        delta_fields.insert(key.clone());
+                                    }
+                                }
+                            }
+                        }
+
                         match parse_chat_delta(data) {
-                            Ok(Some(chunk)) => {
-                                if tx.send(Ok(chunk)).await.is_err() {
+                            Ok(Some(delta)) => {
+                                if tx.send(Ok(delta)).await.is_err() {
                                     break 'outer;
                                 }
                             }
@@ -210,24 +241,53 @@ where
                 None => break,
             }
         }
+
+        if !delta_fields.is_empty() {
+            eprintln!("provider delta fields: {delta_fields:?}");
+        }
     });
 
     tokio_stream::wrappers::ReceiverStream::new(rx)
 }
 
-/// Extracts `choices[0].delta.content` from one `data:` payload. Returns
-/// `Ok(None)` for keep-alives/role frames with no content.
-fn parse_chat_delta(data: &str) -> Result<Option<String>, String> {
+/// Classifies one `data:` payload. Frames with a delta always count as
+/// liveness: content deltas carry text, reasoning deltas (thinking models —
+/// they can stream long before any text) and bare preambles surface as
+/// `Reasoning` so the chat pump's first-chunk timeout measures the
+/// provider's responsiveness, not its verbosity. Reasoning text rides the
+/// `reasoning_content` (DeepSeek/GLM-official) or `reasoning`
+/// (OpenRouter-style) field — providers disagree on the name.
+fn parse_chat_delta(data: &str) -> Result<Option<MessageDelta>, String> {
     let value: serde_json::Value =
         serde_json::from_str(data).map_err(|err| format!("invalid SSE payload: {err}"))?;
 
-    Ok(value
+    let delta = value
         .get("choices")
         .and_then(|choices| choices.get(0))
-        .and_then(|choice| choice.get("delta"))
-        .and_then(|delta| delta.get("content"))
-        .and_then(|content| content.as_str())
-        .map(|chunk| chunk.to_string()))
+        .and_then(|choice| choice.get("delta"));
+
+    Ok(match delta {
+        Some(delta) => {
+            let reasoning = delta
+                .get("reasoning_content")
+                .and_then(|content| content.as_str())
+                .or_else(|| delta.get("reasoning").and_then(|content| content.as_str()));
+            if let Some(reasoning) = reasoning {
+                Some(MessageDelta::Reasoning(reasoning.to_string()))
+            } else {
+                match delta.get("content") {
+                    Some(content) => content
+                        .as_str()
+                        .map(|chunk| MessageDelta::Content(chunk.to_string())),
+                    // A delta with neither content nor reasoning (role-only
+                    // preamble): live, but nothing to say.
+                    None => Some(MessageDelta::Content(String::new())),
+                }
+            }
+        }
+        // No delta at all (e.g. usage-only final frames): nothing happened.
+        None => None,
+    })
 }
 
 /// Incremental `data:`-line SSE decoder. Feed raw text, get complete event
@@ -272,6 +332,21 @@ mod tests {
         Box::pin(openai_content_stream(inner))
     }
 
+    /// Collects content pieces from a provider stream, counting reasoning
+    /// (liveness) pieces along the way.
+    async fn collect(stream: MessageStream) -> (String, usize) {
+        let mut collected = String::new();
+        let mut reasoning = 0;
+        futures_util::pin_mut!(stream);
+        while let Some(item) = stream.next().await {
+            match item.unwrap() {
+                MessageDelta::Content(piece) => collected.push_str(&piece),
+                MessageDelta::Reasoning(_) => reasoning += 1,
+            }
+        }
+        (collected, reasoning)
+    }
+
     #[tokio::test]
     async fn decodes_openai_sse_frames() {
         let payload = concat!(
@@ -282,25 +357,22 @@ mod tests {
             "data: [DONE]\n\n",
         );
 
-        let mut stream = stream_from_strings(vec![Ok(payload.into())]);
-        let mut collected = String::new();
-        while let Some(item) = stream.next().await {
-            collected.push_str(&item.unwrap());
-        }
+        let (collected, reasoning) = collect(stream_from_strings(vec![Ok(payload.into())])).await;
 
         assert_eq!(collected, "Hello world");
+        assert_eq!(reasoning, 0, "keep-alive comments carry no delta");
     }
 
     #[tokio::test]
     async fn decodes_frames_split_across_chunks() {
-        let mut stream = stream_from_strings(vec![
+        let (collected, _) = collect(stream_from_strings(vec![
             Ok("data: {\"choices\":[{\"del".into()),
             Ok("ta\":{\"content\":\"abc\"}}]}\n\ndata: [DO".into()),
             Ok("NE]\n\n".into()),
-        ]);
+        ]))
+        .await;
 
-        assert_eq!(stream.next().await.unwrap().unwrap(), "abc");
-        assert!(stream.next().await.is_none());
+        assert_eq!(collected, "abc");
     }
 
     #[tokio::test]
@@ -310,6 +382,39 @@ mod tests {
         let error = stream.next().await.unwrap().unwrap_err();
 
         assert!(matches!(error, ProviderError::Stream(_)));
+    }
+
+    #[tokio::test]
+    async fn reasoning_frames_carry_liveness_without_text() {
+        let payload = concat!(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"pondering\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\" more\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n",
+            "data: {\"choices\":[]}\n\n",
+            "data: [DONE]\n\n",
+        );
+
+        let (collected, reasoning) = collect(stream_from_strings(vec![Ok(payload.into())])).await;
+
+        assert_eq!(collected, "answer");
+        assert_eq!(
+            reasoning, 2,
+            "reasoning deltas surface as Reasoning pieces; usage frames yield nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn openrouter_style_reasoning_field_also_counts() {
+        let payload = concat!(
+            "data: {\"choices\":[{\"delta\":{\"reasoning\":\"thinking (openrouter style)\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
+            "data: [DONE]\n\n",
+        );
+
+        let (collected, reasoning) = collect(stream_from_strings(vec![Ok(payload.into())])).await;
+
+        assert_eq!(collected, "ok");
+        assert_eq!(reasoning, 1, "the `reasoning` field is just as alive");
     }
 
     #[tokio::test]
@@ -395,8 +500,8 @@ mod tests {
             .await
             .unwrap();
 
-        let collected: Vec<String> = stream.map(|r| r.unwrap()).collect().await;
-        assert_eq!(collected, vec!["Hi".to_string()]);
+        let (collected, _) = collect(stream).await;
+        assert_eq!(collected, "Hi");
 
         let captured = captured.lock().await.take().unwrap();
         assert_eq!(captured.auth.as_deref(), Some("Bearer sk-test"));

@@ -1,5 +1,6 @@
-import type { FC } from 'react'
+import { useEffect, type FC } from 'react'
 
+import { useQuery } from '@apollo/client/react'
 import {
   ActionBarPrimitive,
   AuiIf,
@@ -18,6 +19,7 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   CopyIcon,
+  EyeOffIcon,
   LoaderCircleIcon,
   SquareIcon,
 } from 'lucide-react'
@@ -31,9 +33,25 @@ import { MarkdownText } from '@frontend/components/assistant-ui/markdown-text'
 import { ToolFallback } from '@frontend/components/assistant-ui/tool-fallback'
 import { TooltipIconButton } from '@frontend/components/assistant-ui/tooltip-icon-button'
 import { Button } from '@frontend/components/ui/button'
+import { EMPTY_THREAD_ID } from '@frontend/config/consts'
+import { useThreadContext } from '@frontend/context/thread'
+import { AllConversationsDocument } from '@frontend/graphql/output/graphql'
 import { cn } from '@frontend/lib/utils'
+import { useThreadActions } from '@frontend/providers/apollo-chat-runtime'
 
 export const Thread: FC = () => {
+  const { currentThreadId } = useThreadContext()
+
+  // The composer's autoFocus covers the first mount only; landing on the
+  // new-chat view later (boot, delete, "New Thread") needs a nudge.
+  useEffect(() => {
+    if (currentThreadId === EMPTY_THREAD_ID) {
+      document
+        .querySelector<HTMLTextAreaElement>('textarea[name="input"]')
+        ?.focus()
+    }
+  }, [currentThreadId])
+
   return (
     <ThreadPrimitive.Root
       className="aui-root aui-thread-root @container flex h-full flex-col bg-white dark:bg-neutral-950"
@@ -57,6 +75,10 @@ export const Thread: FC = () => {
             SystemMessage,
           }}
         />
+
+        {/* Inline in the history flow, in the tool-step style: the last row
+         * while the model reasons, before any reply text exists. */}
+        <ThinkingIndicator />
 
         <ThreadPrimitive.ViewportFooter className="aui-thread-viewport-footer max-w-(--thread-max-width) sticky bottom-0 mx-auto mt-auto flex w-full flex-col gap-4 overflow-visible rounded-t-3xl bg-white pb-4 md:pb-6 dark:bg-neutral-950">
           <ThreadScrollToBottom />
@@ -131,6 +153,23 @@ const ThreadSuggestionItem: FC = () => {
   )
 }
 
+/** Reasoning models stream thinking deltas before any visible text; the
+ * backend flags those frames so the loading state can say what the model is
+ * actually doing instead of a generic spinner. */
+const ThinkingIndicator: FC = () => {
+  const { currentThreadId } = useThreadContext()
+  const { thinkingThreadIds } = useThreadActions()
+  if (!thinkingThreadIds.has(currentThreadId)) {
+    return null
+  }
+  return (
+    <div className="text-muted-foreground my-1 flex items-center gap-2 px-3 text-xs">
+      <LoaderCircleIcon className="size-3 animate-spin" />
+      Thinking…
+    </div>
+  )
+}
+
 const Composer: FC = () => {
   return (
     <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
@@ -149,10 +188,62 @@ const Composer: FC = () => {
   )
 }
 
+/** Incognito birth for a brand-new chat: shown on the empty view only —
+ * existing chats flip the flag from the thread menu. The first turn reads
+ * and writes no memories, and the chat stays out of transcript search. */
+export const IncognitoToggle: FC = () => {
+  const { currentThreadId, newChatIncognito, setNewChatIncognito } =
+    useThreadContext()
+  const { setThreadIncognito } = useThreadActions()
+  // One source of truth for the flag: the Apollo cache (reactive to writes
+  // from every surface — this button, the sidebar badge, the ⋯ menu).
+  const { data: conversationsData } = useQuery(AllConversationsDocument, {
+    fetchPolicy: 'cache-only',
+  })
+
+  // New chats: the toggle sets the pending birth flag. Existing chats: it
+  // flips the persisted flag through the same action the sidebar uses.
+  const isNewChat = currentThreadId === EMPTY_THREAD_ID
+  const persisted =
+    conversationsData?.conversations.find(
+      (c: { id: string; incognito?: boolean }) => c.id === currentThreadId,
+    )?.incognito ?? false
+  const incognito = isNewChat ? newChatIncognito : persisted
+
+  return (
+    <TooltipIconButton
+      tooltip="Incognito — no memories, no history search"
+      side="bottom"
+      type="button"
+      variant="ghost"
+      size="icon"
+      className={cn(
+        'size-8 rounded-full',
+        incognito &&
+          'bg-neutral-900 text-white dark:bg-white dark:text-neutral-950',
+      )}
+      aria-pressed={incognito}
+      aria-label="Toggle incognito for this chat"
+      onClick={() => {
+        if (isNewChat) {
+          setNewChatIncognito(!newChatIncognito)
+          return
+        }
+        setThreadIncognito(currentThreadId, !incognito)
+      }}
+    >
+      <EyeOffIcon className="size-4" />
+    </TooltipIconButton>
+  )
+}
+
 const ComposerAction: FC = () => {
   return (
     <div className="aui-composer-action-wrapper relative mx-2 mb-2 flex items-center justify-between">
-      <ComposerAddAttachment />
+      <div className="flex items-center gap-1">
+        <ComposerAddAttachment />
+        <IncognitoToggle />
+      </div>
       <div className="flex items-center gap-1">
         <AuiIf condition={s => !s.thread.isRunning}>
           <ComposerPrimitive.Send asChild>

@@ -9,7 +9,7 @@
 - This repo uses Tailwind v3.4: bare data variants (`data-active:`, `group-data-active:`) are v4 syntax and are silently dropped — no build error, just missing CSS. Always write `data-[active=true]:` / `group-data-[active=true]:`. When a `data-*` style "doesn't apply", grep the built CSS before touching logic.
 - Axum layer order is load-bearing: CORS must sit OUTSIDE auth middleware or browser preflight (credential-less OPTIONS) gets 401'd and the webview silently loads empty. After any router refactor, assert layer-sensitive behavior (preflight) with a test against the real `build_router`.
 - The `serve_dev` example bypasses the auth layer by design, so passing its browser checks proves nothing about auth-layer interactions — end-to-end regression checks must run the production router (`build_router` with a token).
-- Port :4000 (and other default dev ports) can be held by a Vite instance from a *different* worktree — UI checks silently exercise stale code. Before browser-verifying, resolve the listener's cwd (`lsof -p <pid> | grep cwd`) and boot this worktree's vite on a free port (`vite --port 4010 --strictPort`) instead.
+- Port :4000 (and other default dev ports) can be held by a Vite instance from a _different_ worktree — UI checks silently exercise stale code. Before browser-verifying, resolve the listener's cwd (`lsof -p <pid> | grep cwd`) and boot this worktree's vite on a free port (`vite --port 4010 --strictPort`) instead.
 - `tauri build`'s dmg step runs a Finder AppleScript that fails with `-1743 Not authorized` when the terminal lacks macOS Automation permission, and the bundler swallows the script's stderr (a bare "failed to run bundle_dmg.sh"). Diagnose by running the generated `bundle_dmg.sh` manually; recover with `--sandbox-safe` (skips only the cosmetic Finder layout). Also: stale `rw.*.dmg` temp files inside the source dir get packaged into the dmg — clean them and verify dmg contents by mounting before trusting "Disk image done".
 - vec0 query-planner facts (verified empirically against the vendored 0.1.9 in `t3/where-distance`, pinned by `db.rs::vec0_knn_applies_the_distance_filter_in_sql`): (1) constraints on the `distance` column are left unconsumed by `xBestIndex`, so SQLite core enforces them per-row — `WHERE embedding MATCH ? AND distance <= ?` works and is behavior-equivalent to app-side filtering (KNN distances are monotone in rank); (2) a plain `LIMIT` is consumed as the KNN k, so `LIMIT n` + threshold still only reaches n rows deep — use `k = COUNT(*)` (or a big literal) when you need the full corpus; (3) f32 rounding inside vec0's cosine makes an exact-threshold literal flaky — keep an explicit tolerance (`1.0 - MIN_SIMILARITY + f64::EPSILON`). Don't trust "vec0 doesn't support X" claims without a probe — the amalgamation source is right there.
 - NEVER run `pnpm exec tsc -b` from the repo root — the root tsconfig lacks noEmit/jsx, so it EMITS `.js`/`.d.ts` shadows next to every frontend source (vite then resolves the stale CommonJS artifacts — build crashes) and deletes were needed twice. Always run it from `src/frontend`. Same for cleanup: `find src -name "*.js" -delete` from the repo root kills `tailwind.config.js`/`eslint.config.js` (they live under src/frontend/) — index.css then fails with "border-border class does not exist". Scope cleanup deletes to `src/frontend/src/`.
@@ -18,3 +18,41 @@
 - NEVER run `saveSettings` (or any write mutation) against the real app-data dir via serve_dev — settings is a full three-field replace, so placeholder values WIPE user data (this blanked the user's API key during PR #7 verification, unrecoverable). Verification boots MUST use `PRIVAIT_DATA_DIR=$(mktemp -d)` (0014); inspecting real settings is read-only, and secrets are never read or printed.
 - CI gates (ci.yml): `cargo fmt --all --check` and `cargo clippy --all-targets -- -D warnings` — clippy runs with warnings DENIED, so locally run the exact CI command (plain clippy hides unused-imports/unused-vars as warnings; both bit PR #7).
 - Docs/markdown-only commits: append `[skip ci]` to the commit message — nothing compiled, so CI has nothing to check and the rust job is pure wait. (GitHub Actions honors `[skip ci]`/`[ci skip]` in the subject or body.) Example: `docs: fix typo [skip ci]`.
+- Provider liveness ≠ content: thinking models (GLM, deepseek-r1, o-series on
+  OpenAI-compat endpoints) stream `reasoning_content`/role deltas long before
+  any text, and keep-alives are non-`data:` lines. The chat pump's
+  first-chunk timeout must treat any SSE delta frame as liveness (provider.rs
+  yields empty heartbeat chunks) — gating on content deltas made every GLM
+  chat time out at 30s while the provider was streaming fine.
+- Editing a `gql(/* GraphQL */ ...)` document requires a `pnpm codegen` re-run
+  BEFORE the change works: the client preset resolves the compiled
+  DocumentNode by exact source match, so a stale codegen silently drops new
+  selections from the outgoing request (bit the `reasoning` chunk flag —
+  schema had it, server sent it, client never asked for it). Symptom: field
+  missing from payloads while introspection shows it exists.
+- Streaming chunks and settle-poll merges interleave on the same thread:
+  optimistic/streamed messages carry ARRAY content, server-merged rows carry
+  STRING content ("" while the reply is still empty). `textOf` must handle
+  both shapes or the next chunk crashes on `content[0]` of "" (caught live:
+  TypeError 'in' operator). Encode both shapes in tests.
+- Present ids in the exact grammar the parser accepts, or accept both forms:
+  the distill offer list showed `#3` while UPDATE/DELETE parsed bare `3` —
+  models echo the prefix they're shown, so `UPDATE #3:` was silently dropped
+  (live no-op). Same trap for test mocks: a prompt's worked example (`#7`)
+  leaked into a mock's id scan and produced a misleading "ignored" — scope
+  test-mock parsing to the actual payload section it should read.
+- Git discipline: commit when work is verified, but NEVER push unless the
+  human explicitly asks for it in the current request — "make a PR" or an
+  earlier push approval does not carry over to later commits.
+- pkill patterns like `pkill -f "vite --port 4010"` do NOT match the actual
+  process (`pnpm exec vite --port 4010` forks a node binary whose argv
+  differs) — kill dev servers BY PORT (`lsof -t -i :PORT | xargs kill`) and
+  VERIFY the new server booted (read its log; check for
+  "Port already in use"). A stale vite serving pre-edit modules makes every
+  downstream observation contradict the code — burned a full debugging
+  cycle on a toggle that "worked" in tests and "didn't" live.
+- python string-replace edits on prettier-formatted files must assert the
+  target matched (`assert old in c`) AND verify the result afterwards —
+  prettier reflows code, so exact-string targets silently no-op (several
+  debug-log and behavior edits printed "ok" while changing nothing).
+  NEVER rely on replace-without-assert for behavior changes.
