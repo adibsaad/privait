@@ -165,7 +165,7 @@ export const ThreadList: FC = () => {
                 ))}
                 {allChats.length === 0 && (
                   <p className="text-muted-foreground px-3 pb-1 pl-9 text-xs">
-                    No chats yet — open the project to start one
+                    No chats yet
                   </p>
                 )}
                 {allChats.length > 5 && (
@@ -196,6 +196,9 @@ export const ThreadList: FC = () => {
           {plainThreads.map(thread => (
             <ThreadRow key={thread.id} thread={thread} />
           ))}
+          {plainThreads.length === 0 && (
+            <p className="text-muted-foreground px-3 text-xs">No chats</p>
+          )}
         </div>
       </AuiIf>
 
