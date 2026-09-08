@@ -180,9 +180,7 @@ export const ProjectPage: FC = () => {
                 Chats
               </h2>
               {chats.length === 0 ? (
-                <p className="text-muted-foreground text-sm">
-                  No chats yet — start one above.
-                </p>
+                <p className="text-muted-foreground text-sm">No chats yet</p>
               ) : (
                 <ul className="flex flex-col gap-1">
                   {chats.map(chat => (
