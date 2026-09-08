@@ -1,5 +1,6 @@
-import { useEffect, useState, type FC } from 'react'
+import { useEffect, type FC } from 'react'
 
+import { useQuery } from '@apollo/client/react'
 import {
   ActionBarPrimitive,
   AuiIf,
@@ -34,6 +35,7 @@ import { TooltipIconButton } from '@frontend/components/assistant-ui/tooltip-ico
 import { Button } from '@frontend/components/ui/button'
 import { EMPTY_THREAD_ID } from '@frontend/config/consts'
 import { useThreadContext } from '@frontend/context/thread'
+import { AllConversationsDocument } from '@frontend/graphql/output/graphql'
 import { cn } from '@frontend/lib/utils'
 import { useThreadActions } from '@frontend/providers/apollo-chat-runtime'
 
@@ -190,21 +192,23 @@ const Composer: FC = () => {
  * existing chats flip the flag from the thread menu. The first turn reads
  * and writes no memories, and the chat stays out of transcript search. */
 export const IncognitoToggle: FC = () => {
-  const { currentThreadId, threadList, newChatIncognito, setNewChatIncognito } =
+  const { currentThreadId, newChatIncognito, setNewChatIncognito } =
     useThreadContext()
   const { setThreadIncognito } = useThreadActions()
+  // One source of truth for the flag: the Apollo cache (reactive to writes
+  // from every surface — this button, the sidebar badge, the ⋯ menu).
+  const { data: conversationsData } = useQuery(AllConversationsDocument, {
+    fetchPolicy: 'cache-only',
+  })
 
   // New chats: the toggle sets the pending birth flag. Existing chats: it
-  // flips the persisted flag through the same action the sidebar uses, so
-  // the badge, the menu, and this button always agree. The pressed state is
-  // optimistic (the threadList rebuild lags the cache write by a render),
-  // re-synced whenever the persisted value or the thread changes.
+  // flips the persisted flag through the same action the sidebar uses.
   const isNewChat = currentThreadId === EMPTY_THREAD_ID
   const persisted =
-    threadList.find(t => t.id === currentThreadId)?.incognito ?? false
-  const [override, overrideSet] = useState<boolean | null>(null)
-  useEffect(() => overrideSet(null), [currentThreadId, persisted])
-  const incognito = isNewChat ? newChatIncognito : (override ?? persisted)
+    conversationsData?.conversations.find(
+      (c: { id: string; incognito?: boolean }) => c.id === currentThreadId,
+    )?.incognito ?? false
+  const incognito = isNewChat ? newChatIncognito : persisted
 
   return (
     <TooltipIconButton
@@ -225,8 +229,6 @@ export const IncognitoToggle: FC = () => {
           setNewChatIncognito(!newChatIncognito)
           return
         }
-        overrideSet(!incognito)
-        console.log('[debug-toggle-click]', currentThreadId, !incognito)
         setThreadIncognito(currentThreadId, !incognito)
       }}
     >

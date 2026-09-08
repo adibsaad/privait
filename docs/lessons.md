@@ -44,3 +44,15 @@
 - Git discipline: commit when work is verified, but NEVER push unless the
   human explicitly asks for it in the current request — "make a PR" or an
   earlier push approval does not carry over to later commits.
+- pkill patterns like `pkill -f "vite --port 4010"` do NOT match the actual
+  process (`pnpm exec vite --port 4010` forks a node binary whose argv
+  differs) — kill dev servers BY PORT (`lsof -t -i :PORT | xargs kill`) and
+  VERIFY the new server booted (read its log; check for
+  "Port already in use"). A stale vite serving pre-edit modules makes every
+  downstream observation contradict the code — burned a full debugging
+  cycle on a toggle that "worked" in tests and "didn't" live.
+- python string-replace edits on prettier-formatted files must assert the
+  target matched (`assert old in c`) AND verify the result afterwards —
+  prettier reflows code, so exact-string targets silently no-op (several
+  debug-log and behavior edits printed "ok" while changing nothing).
+  NEVER rely on replace-without-assert for behavior changes.

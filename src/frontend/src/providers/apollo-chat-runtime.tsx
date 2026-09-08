@@ -302,7 +302,6 @@ export function ApolloChatRuntimeProvider({
     conversationId: string,
     incognito: boolean,
   ) => {
-    console.log('[debug-incognito-action]', conversationId, incognito)
     setIncognitoMut({
       variables: { conversationId: Number(conversationId), incognito },
     })

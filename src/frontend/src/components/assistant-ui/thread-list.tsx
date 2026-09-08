@@ -288,14 +288,19 @@ const ThreadRow: FC<{ thread: Thread; indent?: boolean }> = ({
     currentThreadId === thread.id &&
     (location.pathname === '/chat' || location.pathname === '/')
   const generating = runningThreadIds.has(thread.id)
-  const [incognito, setIncognito] = useState(thread.incognito ?? false)
   const [deleting, deletingSet] = useState(false)
+  // One source of truth for the incognito flag: the Apollo cache (reactive
+  // to writes from every surface — this badge, the composer, the ⋯ menu).
+  const { data: conversationsData } = useQuery(AllConversationsDocument, {
+    fetchPolicy: 'cache-only',
+  })
+  const incognito =
+    conversationsData?.conversations.find(c => c.id === thread.id)?.incognito ??
+    false
 
   const toggleIncognito = () => {
-    const next = !incognito
-    setIncognito(next)
     if (Number(thread.id)) {
-      actions.setThreadIncognito(thread.id, next)
+      actions.setThreadIncognito(thread.id, !incognito)
     }
   }
 
